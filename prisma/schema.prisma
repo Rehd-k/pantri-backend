@@ -1,0 +1,917 @@
+// Pantri — payroll-backed revolving credit platform
+// Money: integer kobo only. Ledger is source of truth.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Identity enums ───────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  EMPLOYER
+  EMPLOYEE
+  SUPPLIER
+  LOGISTICS
+}
+
+enum UserStatus {
+  ACTIVE
+  PENDING_APPROVAL
+  SUSPENDED
+}
+
+enum PlatformRole {
+  SUPER_ADMIN
+  FINANCE_OFFICER
+  AUDITOR
+}
+
+enum EmployerMembershipRole {
+  EMPLOYER_ADMIN
+  PAYROLL_OFFICER
+  FINANCE_OFFICER
+  CREDIT_OFFICER
+  AUDITOR
+}
+
+enum EmployeeAccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum PayrollFrequency {
+  MONTHLY
+  BIWEEKLY
+  WEEKLY
+}
+
+// ─── Credit / ledger enums ────────────────────────────────────
+
+enum CreditAccountStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum OverLimitAction {
+  REJECT
+  REQUIRE_APPROVAL
+}
+
+enum OverDurationAction {
+  REJECT
+  REQUIRE_APPROVAL
+  SUGGEST_WAIT
+  ALLOW_HIGHER_DEDUCTION
+}
+
+enum LedgerEntryType {
+  RESERVATION_CREATED
+  RESERVATION_RELEASED
+  PURCHASE_POSTED
+  DELIVERY_FEE
+  SERVICE_FEE
+  INTEREST
+  PENALTY
+  PAYROLL_REPAYMENT
+  REFUND
+  ADJUSTMENT
+  CREDIT_LIMIT_ADJUSTMENT
+  WRITE_OFF
+  MANUAL_CREDIT
+  MANUAL_DEBIT
+  MIGRATION
+}
+
+enum ProductType {
+  FOOD
+  ELECTRONICS
+  RENT
+  SCHOOL_FEES
+  HEALTH
+  OTHER
+}
+
+enum CreditReservationStatus {
+  ACTIVE
+  PARTIALLY_CAPTURED
+  CAPTURED
+  RELEASED
+  EXPIRED
+}
+
+enum WriteOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXECUTED
+}
+
+// ─── Order enums (dual state machines) ────────────────────────
+
+enum OrderFulfillmentStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PROCESSING
+  READY_FOR_PICKUP
+  OUT_FOR_DELIVERY
+  FULFILLED
+  CANCELLED
+  EXPIRED
+}
+
+enum OrderCreditStatus {
+  NONE
+  RESERVED
+  PARTIALLY_CAPTURED
+  CAPTURED
+  PARTIALLY_RELEASED
+  RELEASED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+// Legacy installment enums (read-only after migration)
+enum DeductionStatus {
+  ACTIVE
+  REPAID
+  DEFAULTED
+  SUSPENDED
+}
+
+enum InstallmentStatus {
+  SCHEDULED
+  COLLECTED
+  SKIPPED
+}
+
+// ─── Payroll enums ────────────────────────────────────────────
+
+enum PayrollRunStatus {
+  DRAFT
+  GENERATED
+  EMPLOYER_REVIEW
+  CONFIRMED
+  PROCESSING
+  COMPLETED
+  PARTIALLY_COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum PayrollDeductionLineStatus {
+  PENDING
+  MISSED
+  REMITTED
+  REVERSED
+}
+
+// ─── Risk / notify / outbox ───────────────────────────────────
+
+enum OutboxEventStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum NotificationChannel {
+  IN_APP
+  PUSH
+  EMAIL
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ─── Marketplace enums (unchanged) ────────────────────────────
+
+enum PackageKind {
+  CURATED
+  COMMUNITY
+}
+
+enum PackageVisibility {
+  PRIVATE
+  UNLISTED
+  PUBLIC
+}
+
+enum PackageSubscriptionStatus {
+  PENDING
+  CANCELLED
+}
+
+// ═══════════════════════════════════════════════════════════════
+// IDENTITY & TENANCY
+// ═══════════════════════════════════════════════════════════════
+
+model Employer {
+  id                String           @id @default(cuid())
+  name              String
+  inviteCode        String           @unique
+  payrollDayOfMonth Int              @default(15)
+  payrollFrequency  PayrollFrequency @default(MONTHLY)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  memberships   EmployerMembership[]
+  employees     Employee[]
+  creditPolicy  CreditPolicy?
+  pickupPoints  EmployerPickupPoint[]
+  orders        Order[]
+  payrollRuns   PayrollRun[]
+  users         User[]
+
+  @@map("Employer")
+}
+
+model User {
+  id             String        @id @default(cuid())
+  email          String        @unique
+  passwordHash   String
+  firstName      String
+  lastName       String
+  role           UserRole
+  status         UserStatus    @default(ACTIVE)
+  platformRole   PlatformRole?
+  /// Soft link for employer-role users during transition; prefer EmployerMembership.
+  employerId     String?
+  employer       Employer?     @relation(fields: [employerId], references: [id])
+  businessName   String?
+  fleetName      String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  employee               Employee?
+  memberships            EmployerMembership[]
+  cart                   Cart?
+  productReviews         ProductReview[]
+  reviewHelpfulVotes     ProductReviewHelpful[]
+  wishlistItems          WishlistItem[]
+  packages               PantryPackage[]
+  packageSubscriptions   PackageSubscription[]
+  auditLogs              AuditLog[]            @relation("AuditActor")
+  ledgerEntriesCreated   LedgerEntry[]         @relation("LedgerCreatedBy")
+  notifications          Notification[]
+  idempotencyRecords     IdempotencyRecord[]
+  writeOffsRequested     WriteOffRequest[]     @relation("WriteOffRequester")
+  writeOffsApproved      WriteOffRequest[]     @relation("WriteOffApprover")
+
+  @@index([employerId])
+  @@index([role, status])
+}
+
+model EmployerMembership {
+  id         String                 @id @default(cuid())
+  userId     String
+  user       User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employerId String
+  employer   Employer               @relation(fields: [employerId], references: [id], onDelete: Cascade)
+  role       EmployerMembershipRole
+  createdAt  DateTime               @default(now())
+  updatedAt  DateTime               @updatedAt
+
+  @@unique([userId, employerId, role])
+  @@index([employerId, role])
+  @@index([userId])
+}
+
+model Employee {
+  id                  String                @id @default(cuid())
+  userId              String                @unique
+  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  employerId          String
+  employer            Employer              @relation(fields: [employerId], references: [id])
+  salaryKobo          Int
+  deductionPercent    Int                   @default(20)
+  employmentStartedAt DateTime              @default(now())
+  accountStatus       EmployeeAccountStatus @default(ACTIVE)
+  addressLine         String?
+  city                String?
+  state               String?
+  latitude            Float?
+  longitude           Float?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  creditAccount       CreditAccount?
+  riskProfile         RiskProfile?
+  salaryHistory       SalaryHistory[]
+  orders              Order[]
+  payrollLines        PayrollDeductionLine[]
+
+  @@index([employerId])
+  @@index([employerId, accountStatus])
+  @@index([userId, employerId])
+}
+
+model SalaryHistory {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  salaryKobo Int
+  effectiveAt DateTime @default(now())
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  @@index([employeeId, effectiveAt])
+}
+
+model EmployerPickupPoint {
+  id          String   @id @default(cuid())
+  employerId  String
+  employer    Employer @relation(fields: [employerId], references: [id], onDelete: Cascade)
+  label       String
+  addressLine String
+  city        String
+  state       String?
+  latitude    Float
+  longitude   Float
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  orders      Order[]
+
+  @@index([employerId, isActive])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CREDIT ENGINE
+// ═══════════════════════════════════════════════════════════════
+
+model CreditPolicy {
+  id                              String             @id @default(cuid())
+  employerId                      String             @unique
+  employer                        Employer           @relation(fields: [employerId], references: [id], onDelete: Cascade)
+  version                         Int                @default(1)
+  defaultDeductionPercent         Int                @default(20)
+  minDeductionPercent             Int                @default(10)
+  maxDeductionPercent             Int                @default(35)
+  employeeMaySetDeductionPercent  Boolean            @default(true)
+  creditMultiplierBps             Int                @default(15000) // 1.5x = 15000 bps of 10000
+  maxRepaymentMonths              Int                @default(6)
+  reservationTtlHours             Int                @default(72)
+  approvalTtlHours                Int                @default(72)
+  interestAnnualRateBps           Int                @default(1800) // 18%
+  interestGraceDays               Int                @default(30)
+  penaltiesEnabled                Boolean            @default(false)
+  minDaysBetweenPurchases         Int                @default(14)
+  maxPurchasesInWindow            Int                @default(2)
+  purchaseWindowDays              Int                @default(30)
+  requirePriorDeductionAfterFirst Boolean            @default(true)
+  overLimitAction                 OverLimitAction    @default(REJECT)
+  overDurationAction              OverDurationAction @default(REJECT)
+  approvalThresholdKobo           Int?
+  requireApprovalFirstPurchase    Boolean            @default(false)
+  requireApprovalHighRisk         Boolean            @default(true)
+  highRiskScoreThreshold          Int                @default(70)
+  consecutiveMissesBeforeFreeze   Int                @default(3)
+  createdAt                       DateTime           @default(now())
+  updatedAt                       DateTime           @updatedAt
+}
+
+model CreditAccount {
+  id                         String              @id @default(cuid())
+  employeeId                 String              @unique
+  employee                   Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  creditLimitKobo            Int                 @default(0)
+  manualLimitOverrideKobo    Int?
+  principalOutstandingKobo   Int                 @default(0)
+  postedInterestKobo         Int                 @default(0)
+  postedFeesKobo             Int                 @default(0)
+  postedPenaltiesKobo        Int                 @default(0)
+  reservedKobo               Int                 @default(0)
+  accruedInterestUnpostedKobo Int                @default(0)
+  availableKobo              Int                 @default(0)
+  version                    Int                 @default(0)
+  status                     CreditAccountStatus @default(ACTIVE)
+  consecutiveMissedDeductions Int                @default(0)
+  createdAt                  DateTime            @default(now())
+  updatedAt                  DateTime            @updatedAt
+
+  ledgerEntries    LedgerEntry[]
+  reservations     CreditReservation[]
+  interestDays     InterestAccrualDay[]
+  writeOffRequests WriteOffRequest[]
+
+  @@index([status])
+}
+
+model LedgerEntry {
+  id              String          @id @default(cuid())
+  creditAccountId String
+  creditAccount   CreditAccount   @relation(fields: [creditAccountId], references: [id])
+  sequence        Int
+  entryType       LedgerEntryType
+  /// Positive = increases amount owed / reserved; negative = decreases (repayment, release, refund).
+  amountKobo      Int
+  /// Snapshot of total posted owed (principal+interest+fees+penalties) after this entry.
+  balanceAfterKobo Int
+  reservedAfterKobo Int           @default(0)
+  productType     ProductType?
+  referenceType   String?
+  referenceId     String?
+  idempotencyKey  String?
+  metadata        Json            @default("{}")
+  createdByUserId String?
+  createdBy       User?           @relation("LedgerCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime        @default(now())
+
+  @@unique([creditAccountId, sequence])
+  @@unique([creditAccountId, idempotencyKey])
+  @@index([creditAccountId, createdAt])
+  @@index([referenceType, referenceId])
+  @@index([entryType, createdAt])
+}
+
+model CreditReservation {
+  id                    String                  @id @default(cuid())
+  creditAccountId       String
+  creditAccount         CreditAccount           @relation(fields: [creditAccountId], references: [id])
+  orderId               String                  @unique
+  order                 Order                   @relation(fields: [orderId], references: [id])
+  amountKobo            Int
+  capturedKobo          Int                     @default(0)
+  releasedKobo          Int                     @default(0)
+  status                CreditReservationStatus @default(ACTIVE)
+  expiresAt             DateTime
+  createdLedgerEntryId  String?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  @@index([creditAccountId, status])
+  @@index([status, expiresAt])
+}
+
+model InterestAccrualDay {
+  id                String        @id @default(cuid())
+  creditAccountId   String
+  creditAccount     CreditAccount @relation(fields: [creditAccountId], references: [id])
+  accrualDate       DateTime      @db.Date
+  outstandingBaseKobo Int
+  accrualKobo       Int
+  posted            Boolean       @default(false)
+  createdAt         DateTime      @default(now())
+
+  @@unique([creditAccountId, accrualDate])
+  @@index([posted, accrualDate])
+}
+
+model WriteOffRequest {
+  id              String         @id @default(cuid())
+  creditAccountId String
+  creditAccount   CreditAccount  @relation(fields: [creditAccountId], references: [id])
+  amountKobo      Int
+  reason          String
+  status          WriteOffStatus @default(PENDING)
+  requestedById   String
+  requestedBy     User           @relation("WriteOffRequester", fields: [requestedById], references: [id])
+  approvedById    String?
+  approvedBy      User?          @relation("WriteOffApprover", fields: [approvedById], references: [id])
+  ledgerEntryId   String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([status, createdAt])
+}
+
+model PlatformSettings {
+  id                       String   @id @default("default")
+  maxInterestAnnualRateBps Int      @default(2400)
+  penaltiesEnabledGlobal   Boolean  @default(false)
+  updatedAt                DateTime @updatedAt
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ORDERS
+// ═══════════════════════════════════════════════════════════════
+
+model Order {
+  id                  String                 @id @default(cuid())
+  employeeId          String
+  employee            Employee               @relation(fields: [employeeId], references: [id])
+  employerId          String
+  employer            Employer               @relation(fields: [employerId], references: [id])
+  pickupPointId       String
+  pickupPoint         EmployerPickupPoint    @relation(fields: [pickupPointId], references: [id])
+  productType         ProductType            @default(FOOD)
+  subtotalKobo        Int
+  deliveryFeeKobo     Int
+  serviceFeeKobo      Int                    @default(0)
+  totalKobo           Int
+  fulfillmentStatus   OrderFulfillmentStatus @default(DRAFT)
+  creditStatus        OrderCreditStatus      @default(NONE)
+  approvalExpiresAt   DateTime?
+  approvedAmountKobo  Int?
+  graceInterestStartsAt DateTime?
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+
+  items          OrderItem[]
+  reservation    CreditReservation?
+  /// Legacy read-only after revolving credit cutover.
+  deductionPlan  PayrollDeductionPlan?
+
+  @@index([employeeId, employerId])
+  @@index([employeeId, fulfillmentStatus, createdAt])
+  @@index([employerId, fulfillmentStatus])
+  @@index([pickupPointId])
+  @@index([creditStatus, fulfillmentStatus])
+}
+
+model OrderItem {
+  id               String   @id @default(cuid())
+  orderId          String
+  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId        String
+  name             String
+  quantity         Int
+  fulfilledQuantity Int     @default(0)
+  unitPriceKobo    Int
+  lineTotalKobo    Int
+  createdAt        DateTime @default(now())
+
+  @@index([orderId])
+}
+
+/// Legacy per-order installment plan — retained read-only; no new rows after cutover.
+model PayrollDeductionPlan {
+  id            String                        @id @default(cuid())
+  orderId       String                        @unique
+  order         Order                         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  intervalCount Int
+  status        DeductionStatus               @default(ACTIVE)
+  createdAt     DateTime                      @default(now())
+  updatedAt     DateTime                      @updatedAt
+  installments  PayrollDeductionInstallment[]
+}
+
+model PayrollDeductionInstallment {
+  id         String            @id @default(cuid())
+  planId     String
+  plan       PayrollDeductionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  sequence   Int
+  amountKobo Int
+  dueDate    DateTime
+  status     InstallmentStatus @default(SCHEDULED)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  @@unique([planId, sequence])
+  @@index([status, dueDate])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PAYROLL
+// ═══════════════════════════════════════════════════════════════
+
+model PayrollRun {
+  id             String           @id @default(cuid())
+  employerId     String
+  employer       Employer         @relation(fields: [employerId], references: [id])
+  periodStart    DateTime
+  periodEnd      DateTime
+  payrollDate    DateTime
+  status         PayrollRunStatus @default(DRAFT)
+  idempotencyKey String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  lines          PayrollDeductionLine[]
+
+  @@unique([employerId, idempotencyKey])
+  @@index([employerId, status])
+  @@index([employerId, payrollDate])
+}
+
+model PayrollDeductionLine {
+  id                       String                     @id @default(cuid())
+  payrollRunId             String
+  payrollRun               PayrollRun                 @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employeeId               String
+  employee                 Employee                   @relation(fields: [employeeId], references: [id])
+  salarySnapshotKobo       Int
+  deductionPercentSnapshot Int
+  requestedKobo            Int
+  collectedKobo            Int                        @default(0)
+  status                   PayrollDeductionLineStatus @default(PENDING)
+  ledgerEntryId            String?
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
+
+  @@unique([payrollRunId, employeeId])
+  @@index([employeeId, status])
+  @@index([status])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RISK / AUDIT / OUTBOX / NOTIFICATIONS / IDEMPOTENCY
+// ═══════════════════════════════════════════════════════════════
+
+model RiskProfile {
+  id         String   @id @default(cuid())
+  employeeId String   @unique
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  score      Int      @default(50)
+  factors    Json     @default("{}")
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id])
+  action     String
+  entityType String
+  entityId   String?
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+}
+
+model OutboxEvent {
+  id          String            @id @default(cuid())
+  type        String
+  payload     Json
+  status      OutboxEventStatus @default(PENDING)
+  attempts    Int               @default(0)
+  lastError   String?
+  createdAt   DateTime          @default(now())
+  processedAt DateTime?
+
+  @@index([status, createdAt])
+}
+
+model Notification {
+  id        String                     @id @default(cuid())
+  userId    String
+  user      User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String
+  channel   NotificationChannel        @default(IN_APP)
+  status    NotificationDeliveryStatus @default(PENDING)
+  payload   Json                       @default("{}")
+  readAt    DateTime?
+  createdAt DateTime                   @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+model IdempotencyRecord {
+  id           String   @id @default(cuid())
+  actorId      String
+  actor        User     @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  action       String
+  key          String
+  requestHash  String
+  responseJson Json?
+  responseCode Int?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@unique([actorId, action, key])
+  @@index([expiresAt])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MARKETPLACE (unchanged domain)
+// ═══════════════════════════════════════════════════════════════
+
+model MarketplaceCategory {
+  id            String                   @id @default(cuid())
+  name          String
+  imageUrl      String
+  accentColor   String
+  sortOrder     Int                      @default(0)
+  isActive      Boolean                  @default(true)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  subcategories MarketplaceSubcategory[]
+  products      MarketplaceProduct[]
+
+  @@index([isActive, sortOrder])
+}
+
+model MarketplaceSubcategory {
+  id         String               @id @default(cuid())
+  categoryId String
+  category   MarketplaceCategory  @relation(fields: [categoryId], references: [id])
+  name       String
+  sortOrder  Int                  @default(0)
+  isActive   Boolean              @default(true)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+  products   MarketplaceProduct[]
+
+  @@index([categoryId, isActive, sortOrder])
+}
+
+model MarketplaceProduct {
+  id                           String                 @id @default(cuid())
+  categoryId                   String
+  category                     MarketplaceCategory    @relation(fields: [categoryId], references: [id])
+  subcategoryId                String
+  subcategory                  MarketplaceSubcategory @relation(fields: [subcategoryId], references: [id])
+  name                         String
+  brand                        String
+  packageLabel                 String
+  imageUrl                     String
+  priceKobo                    Int
+  retailPriceKobo              Int
+  description                  String                 @default("")
+  origin                       String                 @default("")
+  expiresAt                    DateTime?
+  isVerified                   Boolean                @default(false)
+  bulkAllocationClaimedPercent Int                    @default(0)
+  nutritionFacts               Json                   @default("{}")
+  perfectFor                   Json                   @default("[]")
+  tags                         String[]               @default([])
+  sortOrder                    Int                    @default(0)
+  isActive                     Boolean                @default(true)
+  createdAt                    DateTime               @default(now())
+  updatedAt                    DateTime               @updatedAt
+  cartItems                    CartItem[]
+  reviews                      ProductReview[]
+  wishlistItems                WishlistItem[]
+  packageItems                 PackageItem[]
+
+  @@index([categoryId, isActive])
+  @@index([subcategoryId, isActive])
+  @@index([isActive, sortOrder])
+}
+
+model WishlistItem {
+  id              String             @id @default(cuid())
+  userId          String
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId       String
+  product         MarketplaceProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceKoboAtSave Int
+  createdAt       DateTime           @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId, createdAt])
+}
+
+model ProductReview {
+  id           String                 @id @default(cuid())
+  productId    String
+  product      MarketplaceProduct     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rating       Int
+  body         String
+  helpfulCount Int                    @default(0)
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  helpfulVotes ProductReviewHelpful[]
+
+  @@unique([productId, userId])
+  @@index([productId, createdAt])
+  @@index([productId, helpfulCount])
+}
+
+model ProductReviewHelpful {
+  reviewId  String
+  userId    String
+  review    ProductReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime      @default(now())
+
+  @@id([reviewId, userId])
+}
+
+model Cart {
+  id        String     @id @default(cuid())
+  userId    String     @unique
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model CartItem {
+  id            String             @id @default(cuid())
+  cartId        String
+  cart          Cart               @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  productId     String
+  product       MarketplaceProduct @relation(fields: [productId], references: [id])
+  quantity      Int                @default(1)
+  unitPriceKobo Int
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([cartId, productId])
+  @@index([cartId])
+  @@index([productId])
+}
+
+model MarketplaceBanner {
+  id            String   @id @default(cuid())
+  badgeLabel    String
+  title         String
+  subtitle      String
+  ctaLabel      String
+  ctaRoute      String?
+  gradientStart String
+  gradientEnd   String
+  sortOrder     Int      @default(0)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
+model PantryPackage {
+  id              String                 @id @default(cuid())
+  kind            PackageKind
+  name            String
+  description     String                 @default("")
+  coverImageUrl   String
+  isPopular       Boolean                @default(false)
+  sortOrder       Int                    @default(0)
+  isActive        Boolean                @default(true)
+  visibility      PackageVisibility      @default(PRIVATE)
+  shareSlug       String                 @unique
+  createdByUserId String?
+  createdBy       User?                  @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  items           PackageItem[]
+  subscriptions   PackageSubscription[]
+
+  @@index([kind, isActive, sortOrder])
+  @@index([visibility, kind])
+  @@index([createdByUserId])
+}
+
+model PackageItem {
+  id        String             @id @default(cuid())
+  packageId String
+  package   PantryPackage      @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  productId String
+  product   MarketplaceProduct @relation(fields: [productId], references: [id])
+  quantity  Int                @default(1)
+  sortOrder Int                @default(0)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  @@unique([packageId, productId])
+  @@index([packageId, sortOrder])
+}
+
+model PackageDiscountTier {
+  id              String   @id @default(cuid())
+  label           String
+  minSpendKobo    Int
+  discountPercent Int
+  sortOrder       Int      @default(0)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isActive, minSpendKobo])
+}
+
+model PlatformDeliverySettings {
+  id                  String   @id @default("default")
+  freeDeliveryMinKobo Int
+  deliveryFeeKobo     Int
+  updatedAt           DateTime @updatedAt
+}
+
+model PackageSubscription {
+  id        String                    @id @default(cuid())
+  userId    String
+  user      User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  packageId String
+  package   PantryPackage             @relation(fields: [packageId], references: [id])
+  status    PackageSubscriptionStatus @default(PENDING)
+  snapshot  Json
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+
+  @@index([userId, status])
+  @@index([packageId, status])
+}
