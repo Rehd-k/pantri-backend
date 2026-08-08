@@ -201,6 +201,35 @@ enum NotificationDeliveryStatus {
 enum PackageKind {
   CURATED
   COMMUNITY
+  AI_GENERATED
+}
+
+// ─── Nutrition / meal-plan enums ──────────────────────────────
+
+enum DietaryLifestyle {
+  EVERYTHING
+  VEGAN
+  VEGETARIAN
+  KETO
+}
+
+enum ActivityLevel {
+  SEDENTARY
+  MODERATE
+  VERY_ACTIVE
+}
+
+enum MealPlanStatus {
+  GENERATING
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  FAILED
+}
+
+enum MealItemMatchType {
+  PRIMARY
+  ALTERNATIVE
 }
 
 enum PackageVisibility {
@@ -269,6 +298,7 @@ model User {
   idempotencyRecords     IdempotencyRecord[]
   writeOffsRequested     WriteOffRequest[]     @relation("WriteOffRequester")
   writeOffsApproved      WriteOffRequest[]     @relation("WriteOffApprover")
+  mealPlansReviewed      MealPlan[]            @relation("MealPlanReviewer")
 
   @@index([employerId])
   @@index([role, status])
@@ -312,6 +342,8 @@ model Employee {
   salaryHistory       SalaryHistory[]
   orders              Order[]
   payrollLines        PayrollDeductionLine[]
+  healthProfile       HealthProfile?
+  mealPlans           MealPlan[]
 
   @@index([employerId])
   @@index([employerId, accountStatus])
@@ -754,6 +786,8 @@ model MarketplaceProduct {
   reviews                      ProductReview[]
   wishlistItems                WishlistItem[]
   packageItems                 PackageItem[]
+  productAllergens             ProductAllergen[]
+  mealPlanItems                MealPlanItem[]
 
   @@index([categoryId, isActive])
   @@index([subcategoryId, isActive])
@@ -860,6 +894,7 @@ model PantryPackage {
   updatedAt       DateTime               @updatedAt
   items           PackageItem[]
   subscriptions   PackageSubscription[]
+  mealPlan        MealPlan?
 
   @@index([kind, isActive, sortOrder])
   @@index([visibility, kind])
@@ -914,4 +949,154 @@ model PackageSubscription {
 
   @@index([userId, status])
   @@index([packageId, status])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NUTRITION & AI MEAL PLANS
+// ═══════════════════════════════════════════════════════════════
+
+model Allergy {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profileLinks     HealthProfileAllergy[]
+  productAllergens ProductAllergen[]
+
+  @@index([isActive, sortOrder])
+}
+
+model PrimaryGoal {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String   @default("")
+  iconKey     String   @default("flag")
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  profileLinks HealthProfileGoal[]
+
+  @@index([isActive, sortOrder])
+}
+
+model HealthProfile {
+  id            String           @id @default(cuid())
+  employeeId    String           @unique
+  employee      Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  age           Int
+  gender        String
+  heightCm      Int
+  weightKg      Int
+  lifestyle     DietaryLifestyle @default(EVERYTHING)
+  activityLevel ActivityLevel    @default(MODERATE)
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  allergies HealthProfileAllergy[]
+  goals     HealthProfileGoal[]
+}
+
+model HealthProfileAllergy {
+  id              String        @id @default(cuid())
+  healthProfileId String
+  healthProfile   HealthProfile @relation(fields: [healthProfileId], references: [id], onDelete: Cascade)
+  allergyId       String?
+  allergy         Allergy?      @relation(fields: [allergyId], references: [id], onDelete: SetNull)
+  customLabel     String?
+  createdAt       DateTime      @default(now())
+
+  @@index([healthProfileId])
+  @@index([allergyId])
+}
+
+model HealthProfileGoal {
+  id              String        @id @default(cuid())
+  healthProfileId String
+  healthProfile   HealthProfile @relation(fields: [healthProfileId], references: [id], onDelete: Cascade)
+  goalId          String?
+  goal            PrimaryGoal?  @relation(fields: [goalId], references: [id], onDelete: SetNull)
+  customLabel     String?
+  createdAt       DateTime      @default(now())
+
+  @@index([healthProfileId])
+  @@index([goalId])
+}
+
+model ProductAllergen {
+  id        String             @id @default(cuid())
+  productId String
+  product   MarketplaceProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  allergyId String
+  allergy   Allergy            @relation(fields: [allergyId], references: [id], onDelete: Cascade)
+  createdAt DateTime           @default(now())
+
+  @@unique([productId, allergyId])
+  @@index([allergyId])
+  @@index([productId])
+}
+
+model MealPlan {
+  id             String         @id @default(cuid())
+  employeeId     String
+  employee       Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  status         MealPlanStatus @default(GENERATING)
+  title          String         @default("Personalized Meal Plan")
+  promptSnapshot Json           @default("{}")
+  rawAiResponse  Json           @default("{}")
+  failureReason  String?
+  adminNote      String?
+  reviewedById   String?
+  reviewedBy     User?          @relation("MealPlanReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt     DateTime?
+  packageId      String?        @unique
+  package        PantryPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  days MealPlanDay[]
+
+  @@index([employeeId, status])
+  @@index([status, createdAt])
+}
+
+model MealPlanDay {
+  id         String   @id @default(cuid())
+  mealPlanId String
+  mealPlan   MealPlan @relation(fields: [mealPlanId], references: [id], onDelete: Cascade)
+  dayIndex   Int
+  label      String   @default("")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  items MealPlanItem[]
+
+  @@unique([mealPlanId, dayIndex])
+  @@index([mealPlanId])
+}
+
+model MealPlanItem {
+  id                   String             @id @default(cuid())
+  mealPlanDayId        String
+  mealPlanDay          MealPlanDay        @relation(fields: [mealPlanDayId], references: [id], onDelete: Cascade)
+  mealSlot             String
+  title                String
+  rationale            String             @default("")
+  requestedProductName String             @default("")
+  productId            String?
+  product              MarketplaceProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  matchType            MealItemMatchType  @default(PRIMARY)
+  quantity             Int                @default(1)
+  sortOrder            Int                @default(0)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([mealPlanDayId, sortOrder])
+  @@index([productId])
 }

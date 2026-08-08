@@ -644,6 +644,88 @@ async function main() {
     console.log(`Curated packages already exist (${packageCount})`);
   }
 
+  // --- Nutrition catalogs: allergies + primary goals ---
+  {
+    const allergies = [
+      { name: 'Peanuts', slug: 'peanuts', sortOrder: 1 },
+      { name: 'Gluten', slug: 'gluten', sortOrder: 2 },
+      { name: 'Dairy', slug: 'dairy', sortOrder: 3 },
+      { name: 'Shellfish', slug: 'shellfish', sortOrder: 4 },
+      { name: 'Soy', slug: 'soy', sortOrder: 5 },
+    ] as const;
+
+    for (const allergy of allergies) {
+      await prisma.allergy.upsert({
+        where: { slug: allergy.slug },
+        create: {
+          name: allergy.name,
+          slug: allergy.slug,
+          sortOrder: allergy.sortOrder,
+          isActive: true,
+        },
+        update: {
+          name: allergy.name,
+          sortOrder: allergy.sortOrder,
+          isActive: true,
+        },
+      });
+    }
+    console.log(`Seeded ${allergies.length} allergies`);
+
+    const goals = [
+      {
+        name: 'Weight Loss',
+        slug: 'weight-loss',
+        description: 'Burn fat and maintain lean muscle.',
+        iconKey: 'monitoring',
+        sortOrder: 1,
+      },
+      {
+        name: 'Muscle Gain',
+        slug: 'muscle-gain',
+        description: 'High protein intake to build strength.',
+        iconKey: 'exercise',
+        sortOrder: 2,
+      },
+      {
+        name: 'More Energy',
+        slug: 'more-energy',
+        description: 'Focus on sustained release nutrients.',
+        iconKey: 'bolt',
+        sortOrder: 3,
+      },
+      {
+        name: 'Gut Health',
+        slug: 'gut-health',
+        description: 'Focus on digestion and microbiome.',
+        iconKey: 'verified',
+        sortOrder: 4,
+      },
+    ] as const;
+
+    for (const goal of goals) {
+      await prisma.primaryGoal.upsert({
+        where: { slug: goal.slug },
+        create: {
+          name: goal.name,
+          slug: goal.slug,
+          description: goal.description,
+          iconKey: goal.iconKey,
+          sortOrder: goal.sortOrder,
+          isActive: true,
+        },
+        update: {
+          name: goal.name,
+          description: goal.description,
+          iconKey: goal.iconKey,
+          sortOrder: goal.sortOrder,
+          isActive: true,
+        },
+      });
+    }
+    console.log(`Seeded ${goals.length} primary goals`);
+  }
+
   // --- Employee dashboard demo: revolving credit account + fulfilled order + ledger ---
   {
     const employer = await ensureDemoEmployer(prisma);

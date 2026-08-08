@@ -11,6 +11,7 @@ import { IdentityModule } from './identity/identity.module';
 import { MarketplaceModule } from './marketplace/marketplace.module';
 import { MediaModule } from './media/media.module';
 import { NotificationModule } from './notification/notification.module';
+import { NutritionModule } from './nutrition/nutrition.module';
 import { OrderModule } from './order/order.module';
 import { PackagesModule } from './packages/packages.module';
 import { PayrollModule } from './payroll/payroll.module';
@@ -18,6 +19,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ReportingModule } from './reporting/reporting.module';
 import { RiskModule } from './risk/risk.module';
 import { WishlistModule } from './wishlist/wishlist.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -40,6 +42,8 @@ import { WishlistModule } from './wishlist/wishlist.module';
     PayrollModule,
     NotificationModule,
     ReportingModule,
+    AiModule,
+    NutritionModule,
   ],
 })
 export class AppModule {}
