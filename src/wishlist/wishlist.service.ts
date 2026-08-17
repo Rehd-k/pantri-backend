@@ -16,14 +16,37 @@ type WishlistRow = {
   createdAt: Date;
   product: {
     name: string;
-    brand: string;
-    packageLabel: string;
     imageUrl: string;
-    priceKobo: number;
-    retailPriceKobo: number;
     bulkAllocationClaimedPercent: number;
     isActive: boolean;
+    packs: Array<{
+      id: string;
+      brand: string;
+      packageLabel: string;
+      priceKobo: number;
+      retailPriceKobo: number;
+      isActive: boolean;
+    }>;
   };
+};
+
+const productSelect = {
+  name: true,
+  imageUrl: true,
+  bulkAllocationClaimedPercent: true,
+  isActive: true,
+  packs: {
+    where: { isActive: true },
+    orderBy: { priceKobo: 'asc' as const },
+    select: {
+      id: true,
+      brand: true,
+      packageLabel: true,
+      priceKobo: true,
+      retailPriceKobo: true,
+      isActive: true,
+    },
+  },
 };
 
 @Injectable()
@@ -36,20 +59,7 @@ export class WishlistService {
         userId,
         product: { isActive: true },
       },
-      include: {
-        product: {
-          select: {
-            name: true,
-            brand: true,
-            packageLabel: true,
-            imageUrl: true,
-            priceKobo: true,
-            retailPriceKobo: true,
-            bulkAllocationClaimedPercent: true,
-            isActive: true,
-          },
-        },
-      },
+      include: { product: { select: productSelect } },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -67,27 +77,23 @@ export class WishlistService {
   ): Promise<WishlistItemResponseDto> {
     const product = await this.prisma.marketplaceProduct.findFirst({
       where: { id: productId, isActive: true },
+      include: {
+        packs: {
+          where: { isActive: true },
+          orderBy: { priceKobo: 'asc' },
+        },
+      },
     });
     if (!product) {
       throw new NotFoundException('Product not found');
     }
 
+    const cheapest = product.packs[0];
+    const priceKoboAtSave = cheapest?.priceKobo ?? 0;
+
     const existing = await this.prisma.wishlistItem.findUnique({
       where: { userId_productId: { userId, productId } },
-      include: {
-        product: {
-          select: {
-            name: true,
-            brand: true,
-            packageLabel: true,
-            imageUrl: true,
-            priceKobo: true,
-            retailPriceKobo: true,
-            bulkAllocationClaimedPercent: true,
-            isActive: true,
-          },
-        },
-      },
+      include: { product: { select: productSelect } },
     });
     if (existing) {
       return this.toItemDto(existing);
@@ -97,22 +103,9 @@ export class WishlistService {
       data: {
         userId,
         productId,
-        priceKoboAtSave: product.priceKobo,
+        priceKoboAtSave,
       },
-      include: {
-        product: {
-          select: {
-            name: true,
-            brand: true,
-            packageLabel: true,
-            imageUrl: true,
-            priceKobo: true,
-            retailPriceKobo: true,
-            bulkAllocationClaimedPercent: true,
-            isActive: true,
-          },
-        },
-      },
+      include: { product: { select: productSelect } },
     });
     return this.toItemDto(row);
   }
@@ -141,19 +134,21 @@ export class WishlistService {
   }
 
   private toItemDto(row: WishlistRow): WishlistItemResponseDto {
-    const dropAmountKobo = Math.max(
-      0,
-      row.priceKoboAtSave - row.product.priceKobo,
-    );
+    const cheapest = row.product.packs[0];
+    const priceKobo = cheapest?.priceKobo ?? 0;
+    const dropAmountKobo = Math.max(0, row.priceKoboAtSave - priceKobo);
     return {
       id: row.id,
       productId: row.productId,
+      packId: cheapest?.id ?? null,
       name: row.product.name,
-      brand: row.product.brand,
-      packageLabel: row.product.packageLabel,
+      brand: cheapest?.brand ?? '',
+      packageLabel: cheapest
+        ? `from ${cheapest.packageLabel}`
+        : '',
       imageUrl: row.product.imageUrl,
-      priceKobo: row.product.priceKobo,
-      retailPriceKobo: row.product.retailPriceKobo,
+      priceKobo,
+      retailPriceKobo: cheapest?.retailPriceKobo ?? 0,
       bulkAllocationClaimedPercent: row.product.bulkAllocationClaimedPercent,
       priceKoboAtSave: row.priceKoboAtSave,
       priceDropped: dropAmountKobo > 0,

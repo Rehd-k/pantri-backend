@@ -8,7 +8,9 @@ import { CompaniesModule } from './companies/companies.module';
 import { CreditModule } from './credit/credit.module';
 import { DeliverySettingsModule } from './delivery-settings/delivery-settings.module';
 import { IdentityModule } from './identity/identity.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { MarketplaceModule } from './marketplace/marketplace.module';
+import { MeasureModule } from './measure/measure.module';
 import { MediaModule } from './media/media.module';
 import { NotificationModule } from './notification/notification.module';
 import { NutritionModule } from './nutrition/nutrition.module';
@@ -18,6 +20,7 @@ import { PayrollModule } from './payroll/payroll.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ReportingModule } from './reporting/reporting.module';
 import { RiskModule } from './risk/risk.module';
+import { VerificationModule } from './verification/verification.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 import { AiModule } from './ai/ai.module';
 
@@ -28,6 +31,7 @@ import { AiModule } from './ai/ai.module';
     AuthModule,
     AdminModule,
     MarketplaceModule,
+    MeasureModule,
     CartModule,
     WishlistModule,
     MediaModule,
@@ -39,11 +43,13 @@ import { AiModule } from './ai/ai.module';
     RiskModule,
     CreditModule,
     IdentityModule,
+    VerificationModule,
     PayrollModule,
     NotificationModule,
     ReportingModule,
     AiModule,
     NutritionModule,
+    InventoryModule,
   ],
 })
 export class AppModule {}

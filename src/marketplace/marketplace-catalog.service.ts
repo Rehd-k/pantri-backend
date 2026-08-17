@@ -6,26 +6,46 @@ import {
 import type {
   MarketplaceProduct,
   MarketplaceSubcategory,
+  MeasureFamily,
+  MeasureUnit,
   Prisma,
+  ProductPack,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { slugify } from '../common/slug';
+import { parseNutritionFacts } from '../common/nutrition-facts';
+import { packAmountsFromUnit } from '../measure/measure-convert';
+import { MeasureService } from '../measure/measure.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { CreateSubcategoryDto } from './dto/create-subcategory.dto';
 import { ListProductsQueryDto } from './dto/list-products-query.dto';
 import { PerfectForItemDto } from './dto/perfect-for-item.dto';
 import { ProductListResponseDto } from './dto/product-list-response.dto';
 import {
+  ProductPackResponseDto,
   ProductResponseDto,
   RatingDistributionDto,
 } from './dto/product-response.dto';
+import {
+  CreateProductPackDto,
+  UpdateProductPackDto,
+} from './dto/product-pack.dto';
 import { SubcategoryResponseDto } from './dto/subcategory-response.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSubcategoryDto } from './dto/update-subcategory.dto';
 import { MarketplaceReviewsService } from './marketplace-reviews.service';
 
+type PackWithUnit = ProductPack & { packUnit: MeasureUnit };
+
 type ProductWithRelations = MarketplaceProduct & {
   category: { id: string; name: string };
   subcategory: { id: string; name: string };
+  measureFamily: MeasureFamily & {
+    defaultRecipeUnit: MeasureUnit | null;
+    defaultPurchaseUnit: MeasureUnit | null;
+  };
+  packs: PackWithUnit[];
+  productAllergens: Array<{ allergy: { id: string; name: string } }>;
 };
 
 type RatingAggregates = {
@@ -42,11 +62,30 @@ const emptyDistribution = (): RatingDistributionDto => ({
   star5: 0,
 });
 
+const productInclude = {
+  category: { select: { id: true, name: true } },
+  subcategory: { select: { id: true, name: true } },
+  measureFamily: {
+    include: {
+      defaultRecipeUnit: true,
+      defaultPurchaseUnit: true,
+    },
+  },
+  packs: {
+    include: { packUnit: true },
+    orderBy: [{ sortOrder: 'asc' as const }, { packageLabel: 'asc' as const }],
+  },
+  productAllergens: {
+    include: { allergy: { select: { id: true, name: true } } },
+  },
+} satisfies Prisma.MarketplaceProductInclude;
+
 @Injectable()
 export class MarketplaceCatalogService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly reviewsService: MarketplaceReviewsService,
+    private readonly measureService: MeasureService,
   ) {}
 
   listActiveSubcategories(
@@ -77,10 +116,15 @@ export class MarketplaceCatalogService {
     await this.requireCategory(dto.categoryId);
     const sortOrder =
       dto.sortOrder ?? (await this.nextSubcategorySortOrder(dto.categoryId));
+    const slug = await this.uniqueSubcategorySlug(
+      dto.categoryId,
+      dto.slug || dto.name,
+    );
 
     const row = await this.prisma.marketplaceSubcategory.create({
       data: {
         categoryId: dto.categoryId,
+        slug,
         name: dto.name,
         sortOrder,
         isActive: dto.isActive ?? true,
@@ -93,11 +137,20 @@ export class MarketplaceCatalogService {
     id: string,
     dto: UpdateSubcategoryDto,
   ): Promise<SubcategoryResponseDto> {
-    await this.requireSubcategory(id);
+    const existing = await this.requireSubcategory(id);
+    const slug =
+      dto.slug !== undefined
+        ? await this.uniqueSubcategorySlug(
+            existing.categoryId,
+            dto.slug,
+            existing.id,
+          )
+        : undefined;
     const row = await this.prisma.marketplaceSubcategory.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
+        ...(slug !== undefined ? { slug } : {}),
         ...(dto.sortOrder !== undefined ? { sortOrder: dto.sortOrder } : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
       },
@@ -117,70 +170,36 @@ export class MarketplaceCatalogService {
   async listActiveProducts(
     query: ListProductsQueryDto,
   ): Promise<ProductListResponseDto> {
-    const take = query.take ?? 40;
-    const skip = query.skip ?? 0;
-    const where = this.buildProductWhere(query, true);
-
-    const [rows, total] = await Promise.all([
-      this.prisma.marketplaceProduct.findMany({
-        where,
-        include: {
-          category: { select: { id: true, name: true } },
-          subcategory: { select: { id: true, name: true } },
-        },
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-        skip,
-        take,
-      }),
-      this.prisma.marketplaceProduct.count({ where }),
-    ]);
-
-    return {
-      items: await this.toProductDtos(rows),
-      total,
-    };
+    return this.listProducts(query, true);
   }
 
   async listAllProducts(
     query: ListProductsQueryDto,
   ): Promise<ProductListResponseDto> {
-    const take = query.take ?? 100;
-    const skip = query.skip ?? 0;
-    const where = this.buildProductWhere(query, false);
-
-    const [rows, total] = await Promise.all([
-      this.prisma.marketplaceProduct.findMany({
-        where,
-        include: {
-          category: { select: { id: true, name: true } },
-          subcategory: { select: { id: true, name: true } },
-        },
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-        skip,
-        take,
-      }),
-      this.prisma.marketplaceProduct.count({ where }),
-    ]);
-
-    return {
-      items: await this.toProductDtos(rows),
-      total,
-    };
+    return this.listProducts(query, false);
   }
 
   async getActiveProduct(id: string): Promise<ProductResponseDto> {
     const row = await this.prisma.marketplaceProduct.findFirst({
       where: { id, isActive: true },
-      include: {
-        category: { select: { id: true, name: true } },
-        subcategory: { select: { id: true, name: true } },
-      },
+      include: productInclude,
     });
     if (!row) {
       throw new NotFoundException('Product not found');
     }
-    const aggregates =
-      await this.reviewsService.computeRatingAggregates(id);
+    const aggregates = await this.reviewsService.computeRatingAggregates(id);
+    return this.toProductDto(row, aggregates);
+  }
+
+  async getProduct(id: string): Promise<ProductResponseDto> {
+    const row = await this.prisma.marketplaceProduct.findUnique({
+      where: { id },
+      include: productInclude,
+    });
+    if (!row) {
+      throw new NotFoundException('Product not found');
+    }
+    const aggregates = await this.reviewsService.computeRatingAggregates(id);
     return this.toProductDto(row, aggregates);
   }
 
@@ -189,41 +208,53 @@ export class MarketplaceCatalogService {
       dto.subcategoryId,
       dto.categoryId,
     );
-    if (dto.retailPriceKobo < dto.priceKobo) {
-      throw new BadRequestException(
-        'retailPriceKobo must be greater than or equal to priceKobo',
-      );
+    const family = await this.prisma.measureFamily.findUnique({
+      where: { id: dto.measureFamilyId },
+    });
+    if (!family) {
+      throw new NotFoundException('Measure family not found');
     }
 
     const sortOrder =
       dto.sortOrder ?? (await this.nextProductSortOrder(dto.categoryId));
+    const slug = await this.uniqueProductSlug(dto.slug || dto.name);
 
-    const row = await this.prisma.marketplaceProduct.create({
-      data: {
-        categoryId: dto.categoryId,
-        subcategoryId: dto.subcategoryId,
-        name: dto.name,
-        brand: dto.brand,
-        packageLabel: dto.packageLabel,
-        imageUrl: dto.imageUrl,
-        priceKobo: dto.priceKobo,
-        retailPriceKobo: dto.retailPriceKobo,
-        description: dto.description?.trim() ?? '',
-        origin: dto.origin?.trim() ?? '',
-        expiresAt: this.parseExpiresAt(dto.expiresAt),
-        isVerified: dto.isVerified ?? false,
-        bulkAllocationClaimedPercent: dto.bulkAllocationClaimedPercent ?? 0,
-        nutritionFacts: this.normalizeNutritionFacts(dto.nutritionFacts),
-        perfectFor: this.normalizePerfectFor(dto.perfectFor),
-        tags: (dto.tags ?? []).map((t) => t.trim()).filter(Boolean),
-        sortOrder,
-        isActive: dto.isActive ?? true,
-      },
-      include: {
-        category: { select: { id: true, name: true } },
-        subcategory: { select: { id: true, name: true } },
-      },
+    const row = await this.prisma.$transaction(async (tx) => {
+      const product = await tx.marketplaceProduct.create({
+        data: {
+          slug,
+          categoryId: dto.categoryId,
+          subcategoryId: dto.subcategoryId,
+          measureFamilyId: dto.measureFamilyId,
+          name: dto.name,
+          imageUrl: dto.imageUrl,
+          description: dto.description?.trim() ?? '',
+          origin: dto.origin?.trim() ?? '',
+          recipeUnitOverrideMg: dto.recipeUnitOverrideMg ?? null,
+          recipeUnitOverrideMl: dto.recipeUnitOverrideMl ?? null,
+          expiresAt: this.parseExpiresAt(dto.expiresAt),
+          isVerified: dto.isVerified ?? false,
+          bulkAllocationClaimedPercent: dto.bulkAllocationClaimedPercent ?? 0,
+          nutritionFacts: this.normalizeNutritionFacts(dto.nutritionFacts),
+          perfectFor: this.normalizePerfectFor(dto.perfectFor),
+          tags: (dto.tags ?? []).map((t) => t.trim()).filter(Boolean),
+          sortOrder,
+          isActive: dto.isActive ?? true,
+        },
+      });
+
+      if (dto.packs?.length) {
+        for (const [index, pack] of dto.packs.entries()) {
+          await this.insertPack(tx, product.id, product.imageUrl, pack, index);
+        }
+      }
+
+      return tx.marketplaceProduct.findUniqueOrThrow({
+        where: { id: product.id },
+        include: productInclude,
+      });
     });
+
     return this.toProductDto(row, {
       averageRating: 0,
       reviewCount: 0,
@@ -239,14 +270,18 @@ export class MarketplaceCatalogService {
     const categoryId = dto.categoryId ?? existing.categoryId;
     const subcategoryId = dto.subcategoryId ?? existing.subcategoryId;
     await this.assertSubcategoryBelongsToCategory(subcategoryId, categoryId);
-
-    const priceKobo = dto.priceKobo ?? existing.priceKobo;
-    const retailPriceKobo = dto.retailPriceKobo ?? existing.retailPriceKobo;
-    if (retailPriceKobo < priceKobo) {
-      throw new BadRequestException(
-        'retailPriceKobo must be greater than or equal to priceKobo',
-      );
+    if (dto.measureFamilyId) {
+      const family = await this.prisma.measureFamily.findUnique({
+        where: { id: dto.measureFamilyId },
+      });
+      if (!family) {
+        throw new NotFoundException('Measure family not found');
+      }
     }
+    const slug =
+      dto.slug !== undefined
+        ? await this.uniqueProductSlug(dto.slug, existing.id)
+        : undefined;
 
     const row = await this.prisma.marketplaceProduct.update({
       where: { id },
@@ -255,20 +290,22 @@ export class MarketplaceCatalogService {
         ...(dto.subcategoryId !== undefined
           ? { subcategoryId: dto.subcategoryId }
           : {}),
+        ...(dto.measureFamilyId !== undefined
+          ? { measureFamilyId: dto.measureFamilyId }
+          : {}),
         ...(dto.name !== undefined ? { name: dto.name } : {}),
-        ...(dto.brand !== undefined ? { brand: dto.brand } : {}),
-        ...(dto.packageLabel !== undefined
-          ? { packageLabel: dto.packageLabel }
-          : {}),
+        ...(slug !== undefined ? { slug } : {}),
         ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
-        ...(dto.priceKobo !== undefined ? { priceKobo: dto.priceKobo } : {}),
-        ...(dto.retailPriceKobo !== undefined
-          ? { retailPriceKobo: dto.retailPriceKobo }
-          : {}),
         ...(dto.description !== undefined
           ? { description: dto.description.trim() }
           : {}),
         ...(dto.origin !== undefined ? { origin: dto.origin.trim() } : {}),
+        ...(dto.recipeUnitOverrideMg !== undefined
+          ? { recipeUnitOverrideMg: dto.recipeUnitOverrideMg }
+          : {}),
+        ...(dto.recipeUnitOverrideMl !== undefined
+          ? { recipeUnitOverrideMl: dto.recipeUnitOverrideMl }
+          : {}),
         ...(dto.expiresAt !== undefined
           ? { expiresAt: this.parseExpiresAt(dto.expiresAt) }
           : {}),
@@ -294,13 +331,9 @@ export class MarketplaceCatalogService {
         ...(dto.sortOrder !== undefined ? { sortOrder: dto.sortOrder } : {}),
         ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
       },
-      include: {
-        category: { select: { id: true, name: true } },
-        subcategory: { select: { id: true, name: true } },
-      },
+      include: productInclude,
     });
-    const aggregates =
-      await this.reviewsService.computeRatingAggregates(id);
+    const aggregates = await this.reviewsService.computeRatingAggregates(id);
     return this.toProductDto(row, aggregates);
   }
 
@@ -309,14 +342,139 @@ export class MarketplaceCatalogService {
     const row = await this.prisma.marketplaceProduct.update({
       where: { id },
       data: { isActive: false },
-      include: {
-        category: { select: { id: true, name: true } },
-        subcategory: { select: { id: true, name: true } },
-      },
+      include: productInclude,
     });
-    const aggregates =
-      await this.reviewsService.computeRatingAggregates(id);
+    const aggregates = await this.reviewsService.computeRatingAggregates(id);
     return this.toProductDto(row, aggregates);
+  }
+
+  async createPack(
+    productId: string,
+    dto: CreateProductPackDto,
+  ): Promise<ProductPackResponseDto> {
+    const product = await this.requireProduct(productId);
+    const created = await this.prisma.$transaction(async (tx) => {
+      const sortOrder = dto.sortOrder ?? (await this.nextPackSortOrder(productId));
+      return this.insertPack(
+        tx,
+        product.id,
+        product.imageUrl,
+        { ...dto, sortOrder },
+        sortOrder,
+      );
+    });
+    return this.toPackDto(created);
+  }
+
+  async updatePack(
+    packId: string,
+    dto: UpdateProductPackDto,
+  ): Promise<ProductPackResponseDto> {
+    const existing = await this.prisma.productPack.findUnique({
+      where: { id: packId },
+      include: { packUnit: true },
+    });
+    if (!existing) {
+      throw new NotFoundException('Pack not found');
+    }
+    if (
+      dto.retailPriceKobo !== undefined ||
+      dto.priceKobo !== undefined
+    ) {
+      const price = dto.priceKobo ?? existing.priceKobo;
+      const retail = dto.retailPriceKobo ?? existing.retailPriceKobo;
+      if (retail < price) {
+        throw new BadRequestException(
+          'retailPriceKobo must be greater than or equal to priceKobo',
+        );
+      }
+    }
+
+    let amounts = {
+      amountMg: dto.amountMg !== undefined ? dto.amountMg : existing.amountMg,
+      amountMl: dto.amountMl !== undefined ? dto.amountMl : existing.amountMl,
+      amountEach:
+        dto.amountEach !== undefined ? dto.amountEach : existing.amountEach,
+    };
+    if (dto.packUnitId || dto.packAmount) {
+      const unit = await this.measureService.requireUnit(
+        dto.packUnitId ?? existing.packUnitId,
+      );
+      const computed = packAmountsFromUnit(
+        dto.packAmount ?? existing.packAmount,
+        unit,
+      );
+      amounts = {
+        amountMg: dto.amountMg !== undefined ? dto.amountMg : computed.amountMg,
+        amountMl: dto.amountMl !== undefined ? dto.amountMl : computed.amountMl,
+        amountEach:
+          dto.amountEach !== undefined ? dto.amountEach : computed.amountEach,
+      };
+    }
+
+    const row = await this.prisma.productPack.update({
+      where: { id: packId },
+      data: {
+        ...(dto.brand !== undefined ? { brand: dto.brand.trim() } : {}),
+        ...(dto.packUnitId !== undefined ? { packUnitId: dto.packUnitId } : {}),
+        ...(dto.packAmount !== undefined ? { packAmount: dto.packAmount } : {}),
+        ...(dto.packageLabel !== undefined
+          ? { packageLabel: dto.packageLabel.trim() }
+          : {}),
+        ...(dto.priceKobo !== undefined ? { priceKobo: dto.priceKobo } : {}),
+        ...(dto.retailPriceKobo !== undefined
+          ? { retailPriceKobo: dto.retailPriceKobo }
+          : {}),
+        ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
+        amountMg: amounts.amountMg,
+        amountMl: amounts.amountMl,
+        amountEach: amounts.amountEach,
+        ...(dto.sortOrder !== undefined ? { sortOrder: dto.sortOrder } : {}),
+        ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
+      },
+      include: { packUnit: true },
+    });
+    return this.toPackDto(row);
+  }
+
+  async deactivatePack(packId: string): Promise<ProductPackResponseDto> {
+    const existing = await this.prisma.productPack.findUnique({
+      where: { id: packId },
+    });
+    if (!existing) {
+      throw new NotFoundException('Pack not found');
+    }
+    const row = await this.prisma.productPack.update({
+      where: { id: packId },
+      data: { isActive: false },
+      include: { packUnit: true },
+    });
+    return this.toPackDto(row);
+  }
+
+  private async listProducts(
+    query: ListProductsQueryDto,
+    activeOnly: boolean,
+  ): Promise<ProductListResponseDto> {
+    const take = query.take ?? (activeOnly ? 40 : 100);
+    const skip = query.skip ?? 0;
+    const where = this.buildProductWhere(query, activeOnly);
+
+    const [rows, total] = await Promise.all([
+      this.prisma.marketplaceProduct.findMany({
+        where,
+        include: productInclude,
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        skip,
+        take,
+      }),
+      this.prisma.marketplaceProduct.count({ where }),
+    ]);
+
+    return {
+      items: await this.toProductDtos(rows),
+      total,
+    };
   }
 
   private buildProductWhere(
@@ -338,10 +496,23 @@ export class MarketplaceCatalogService {
     if (q) {
       where.OR = [
         { name: { contains: q, mode: 'insensitive' } },
-        { brand: { contains: q, mode: 'insensitive' } },
-        { packageLabel: { contains: q, mode: 'insensitive' } },
+        { slug: { contains: q, mode: 'insensitive' } },
         { tags: { has: q.toLowerCase() } },
         { tags: { hasSome: [q, q.toLowerCase(), q.toUpperCase()] } },
+        {
+          packs: {
+            some: {
+              brand: { contains: q, mode: 'insensitive' },
+            },
+          },
+        },
+        {
+          packs: {
+            some: {
+              packageLabel: { contains: q, mode: 'insensitive' },
+            },
+          },
+        },
         {
           category: {
             name: { contains: q, mode: 'insensitive' },
@@ -360,14 +531,64 @@ export class MarketplaceCatalogService {
           ...(where.OR ?? []),
           ...tokens.flatMap((token) => [
             { name: { contains: token, mode: 'insensitive' as const } },
-            { brand: { contains: token, mode: 'insensitive' as const } },
             { tags: { has: token.toLowerCase() } },
+            {
+              packs: {
+                some: {
+                  brand: { contains: token, mode: 'insensitive' as const },
+                },
+              },
+            },
           ]),
         ];
       }
     }
 
     return where;
+  }
+
+  private async insertPack(
+    tx: Prisma.TransactionClient,
+    productId: string,
+    productImageUrl: string,
+    dto: CreateProductPackDto,
+    index: number,
+  ): Promise<PackWithUnit> {
+    if (dto.retailPriceKobo < dto.priceKobo) {
+      throw new BadRequestException(
+        'retailPriceKobo must be greater than or equal to priceKobo',
+      );
+    }
+    const unit = await tx.measureUnit.findUnique({
+      where: { id: dto.packUnitId },
+    });
+    if (!unit) {
+      throw new NotFoundException('Pack unit not found');
+    }
+    const computed = packAmountsFromUnit(dto.packAmount, unit);
+    const sku = await this.uniquePackSku(
+      tx,
+      dto.sku || `${productId}-${slugify(dto.packageLabel)}`,
+    );
+    return tx.productPack.create({
+      data: {
+        sku,
+        productId,
+        packUnitId: dto.packUnitId,
+        brand: dto.brand.trim(),
+        packAmount: dto.packAmount,
+        amountMg: dto.amountMg ?? computed.amountMg,
+        amountMl: dto.amountMl ?? computed.amountMl,
+        amountEach: dto.amountEach ?? computed.amountEach,
+        packageLabel: dto.packageLabel.trim(),
+        imageUrl: dto.imageUrl?.trim() || productImageUrl,
+        priceKobo: dto.priceKobo,
+        retailPriceKobo: dto.retailPriceKobo,
+        sortOrder: dto.sortOrder ?? index,
+        isActive: dto.isActive ?? true,
+      },
+      include: { packUnit: true },
+    });
   }
 
   private async requireCategory(id: string): Promise<void> {
@@ -430,6 +651,67 @@ export class MarketplaceCatalogService {
       select: { sortOrder: true },
     });
     return (last?.sortOrder ?? -1) + 1;
+  }
+
+  private async nextPackSortOrder(productId: string): Promise<number> {
+    const last = await this.prisma.productPack.findFirst({
+      where: { productId },
+      orderBy: { sortOrder: 'desc' },
+      select: { sortOrder: true },
+    });
+    return (last?.sortOrder ?? -1) + 1;
+  }
+
+  private async uniqueProductSlug(
+    raw: string,
+    excludeId?: string,
+  ): Promise<string> {
+    const base = slugify(raw, 'product');
+    let candidate = base;
+    let n = 2;
+    while (true) {
+      const clash = await this.prisma.marketplaceProduct.findUnique({
+        where: { slug: candidate },
+        select: { id: true },
+      });
+      if (!clash || clash.id === excludeId) return candidate;
+      candidate = `${base}-${n++}`;
+    }
+  }
+
+  private async uniqueSubcategorySlug(
+    categoryId: string,
+    raw: string,
+    excludeId?: string,
+  ): Promise<string> {
+    const base = slugify(raw, 'subcategory');
+    let candidate = base;
+    let n = 2;
+    while (true) {
+      const clash = await this.prisma.marketplaceSubcategory.findFirst({
+        where: { categoryId, slug: candidate },
+        select: { id: true },
+      });
+      if (!clash || clash.id === excludeId) return candidate;
+      candidate = `${base}-${n++}`;
+    }
+  }
+
+  private async uniquePackSku(
+    tx: Prisma.TransactionClient,
+    raw: string,
+  ): Promise<string> {
+    const base = slugify(raw, 'pack');
+    let candidate = base;
+    let n = 2;
+    while (true) {
+      const clash = await tx.productPack.findUnique({
+        where: { sku: candidate },
+        select: { id: true },
+      });
+      if (!clash) return candidate;
+      candidate = `${base}-${n++}`;
+    }
   }
 
   private computeDiscountPercent(
@@ -527,8 +809,36 @@ export class MarketplaceCatalogService {
   ): SubcategoryResponseDto {
     return {
       id: row.id,
+      slug: row.slug,
       categoryId: row.categoryId,
       name: row.name,
+      sortOrder: row.sortOrder,
+      isActive: row.isActive,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
+  private toPackDto(row: PackWithUnit): ProductPackResponseDto {
+    return {
+      id: row.id,
+      sku: row.sku,
+      productId: row.productId,
+      packUnitId: row.packUnitId,
+      packUnit: this.measureService.toUnitDto(row.packUnit),
+      brand: row.brand,
+      packAmount: row.packAmount,
+      amountMg: row.amountMg,
+      amountMl: row.amountMl,
+      amountEach: row.amountEach,
+      packageLabel: row.packageLabel,
+      imageUrl: row.imageUrl,
+      priceKobo: row.priceKobo,
+      retailPriceKobo: row.retailPriceKobo,
+      discountPercent: this.computeDiscountPercent(
+        row.priceKobo,
+        row.retailPriceKobo,
+      ),
       sortOrder: row.sortOrder,
       isActive: row.isActive,
       createdAt: row.createdAt.toISOString(),
@@ -540,30 +850,46 @@ export class MarketplaceCatalogService {
     row: ProductWithRelations,
     aggregates: RatingAggregates,
   ): ProductResponseDto {
+    const activePacks = row.packs.filter((p) => p.isActive);
+    const priced = (activePacks.length > 0 ? activePacks : row.packs).slice();
+    priced.sort((a, b) => a.priceKobo - b.priceKobo);
+    const cheapest = priced[0];
+    const fromPriceKobo = cheapest?.priceKobo ?? 0;
+    const fromRetailPriceKobo = cheapest?.retailPriceKobo ?? 0;
+
     return {
       id: row.id,
+      slug: row.slug,
       categoryId: row.categoryId,
       categoryName: row.category.name,
       subcategoryId: row.subcategoryId,
       subcategoryName: row.subcategory.name,
+      measureFamilyId: row.measureFamilyId,
+      measureFamily: this.measureService.toFamilyDto(row.measureFamily),
       name: row.name,
-      brand: row.brand,
-      packageLabel: row.packageLabel,
       imageUrl: row.imageUrl,
-      priceKobo: row.priceKobo,
-      retailPriceKobo: row.retailPriceKobo,
+      fromPriceKobo,
+      fromRetailPriceKobo,
       discountPercent: this.computeDiscountPercent(
-        row.priceKobo,
-        row.retailPriceKobo,
+        fromPriceKobo,
+        fromRetailPriceKobo,
       ),
       description: row.description,
       origin: row.origin,
+      recipeUnitOverrideMg: row.recipeUnitOverrideMg,
+      recipeUnitOverrideMl: row.recipeUnitOverrideMl,
       expiresAt: row.expiresAt?.toISOString() ?? null,
       isVerified: row.isVerified,
       bulkAllocationClaimedPercent: row.bulkAllocationClaimedPercent,
       nutritionFacts: this.parseNutritionFacts(row.nutritionFacts),
+      nutrition: parseNutritionFacts(row.nutritionFacts),
+      allergens: row.productAllergens.map((link) => ({
+        id: link.allergy.id,
+        name: link.allergy.name,
+      })),
       perfectFor: this.parsePerfectFor(row.perfectFor),
       tags: row.tags,
+      packs: row.packs.map((pack) => this.toPackDto(pack)),
       sortOrder: row.sortOrder,
       isActive: row.isActive,
       averageRating: aggregates.averageRating,

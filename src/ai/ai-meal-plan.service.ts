@@ -9,6 +9,8 @@ export type AiCatalogProduct = {
   packageLabel: string;
   tags: string[];
   nutritionFacts: unknown;
+  inPantry?: boolean;
+  pantryCanonical?: number;
 };
 
 export type AiPlanProfile = {
@@ -23,14 +25,21 @@ export type AiPlanProfile = {
   productCount: number;
 };
 
+export type AiGeneratedIngredient = {
+  productId: string;
+  quantity?: number;
+};
+
 export type AiGeneratedItem = {
   mealSlot: string;
   title: string;
   rationale?: string;
+  instructions?: string;
   requestedProductName?: string;
   productId?: string | null;
   matchType?: 'PRIMARY' | 'ALTERNATIVE';
   quantity?: number;
+  ingredients?: AiGeneratedIngredient[];
 };
 
 export type AiGeneratedDay = {
@@ -70,9 +79,12 @@ export class AiMealPlanService {
       packageLabel: p.packageLabel,
       tags: p.tags,
       nutritionFacts: p.nutritionFacts,
+      inPantry: Boolean(p.inPantry),
+      pantryCanonical: p.pantryCanonical ?? 0,
     }));
 
-    const system = `You are Pantri's nutrition planner for Nigerian payroll-backed grocery shopping.
+    const system = `You are Pantri's home-cook nutrition planner for Nigerian households.
+Recipes MUST use ingredients the employee already has in their pantry whenever possible.
 Return ONLY valid JSON matching this shape:
 {
   "title": string,
@@ -85,20 +97,22 @@ Return ONLY valid JSON matching this shape:
           "mealSlot": "breakfast"|"lunch"|"dinner"|"snack",
           "title": string,
           "rationale": string,
-          "requestedProductName": string,
-          "productId": string|null,
-          "matchType": "PRIMARY"|"ALTERNATIVE",
-          "quantity": number
+          "instructions": string,
+          "matchType": "PRIMARY",
+          "ingredients": [
+            { "productId": string, "quantity": number }
+          ]
         }
       ]
     }
   ]
 }
 Rules:
-- Prefer PRIMARY items that use productId values from the provided catalog only.
-- If the ideal ingredient is missing or unsafe, still propose the meal and add ALTERNATIVE items using the closest catalog productId, explaining why in rationale.
-- Never invent productId values that are not in the catalog.
+- quantity is the number of recipe units (cups, spoons, pieces) of that catalog product.
+- Prefer productId values marked inPantry=true. Do not invent productId values.
 - Create a 3-day plan with breakfast, lunch, and dinner each day.
+- Each meal should have 2-4 ingredients sized to help the user hit their nutrition goals.
+- Never tell the user to buy a grocery package. If an ingredient is missing from pantry, still list it so the app can prompt a restock.
 - Respect allergies, dietary lifestyle, activity level, and goals.`;
 
     const user = JSON.stringify({
@@ -152,41 +166,33 @@ Rules:
     profile: AiPlanProfile;
     products: AiCatalogProduct[];
   }): AiGeneratedPlan {
-    const products = input.products;
+    const pantry = input.products.filter((p) => p.inPantry);
+    const pool = pantry.length > 0 ? pantry : input.products;
     const days: AiGeneratedDay[] = [];
     const slots = ['breakfast', 'lunch', 'dinner'] as const;
 
     for (let dayIndex = 1; dayIndex <= 3; dayIndex++) {
       const items: AiGeneratedItem[] = slots.map((mealSlot, slotIndex) => {
-        const primary =
-          products[(dayIndex + slotIndex) % products.length] ?? null;
-        const alternative =
-          products[(dayIndex + slotIndex + 1) % products.length] ?? null;
-        const list: AiGeneratedItem[] = [];
-        if (primary) {
-          list.push({
-            mealSlot,
-            title: `${mealSlot} featuring ${primary.name}`,
-            rationale: `Selected for ${input.profile.goals.join(', ') || 'balanced nutrition'}`,
-            requestedProductName: primary.name,
-            productId: primary.id,
-            matchType: 'PRIMARY',
-            quantity: 1,
-          });
+        const first = pool[(dayIndex + slotIndex) % pool.length] ?? null;
+        const second = pool[(dayIndex + slotIndex + 1) % pool.length] ?? null;
+        const ingredients: AiGeneratedIngredient[] = [];
+        if (first) ingredients.push({ productId: first.id, quantity: 1 });
+        if (second && second.id !== first?.id) {
+          ingredients.push({ productId: second.id, quantity: 1 });
         }
-        if (alternative && alternative.id !== primary?.id) {
-          list.push({
-            mealSlot,
-            title: `Alternative: ${alternative.name}`,
-            rationale: 'Catalog substitute if primary stock is unavailable',
-            requestedProductName: alternative.name,
-            productId: alternative.id,
-            matchType: 'ALTERNATIVE',
-            quantity: 1,
-          });
-        }
-        return list;
-      }).flat();
+        return {
+          mealSlot,
+          title: `${mealSlot} for ${input.profile.goals[0] ?? 'balanced nutrition'}`,
+          rationale: `Built from pantry staples to support ${input.profile.goals.join(', ') || 'your nutrition goals'}`,
+          instructions:
+            'Prep and cook the listed pantry ingredients. Measure each item, then mark the meal cooked so Pantri can log nutrients and reduce stock.',
+          matchType: 'PRIMARY',
+          ingredients,
+          requestedProductName: first?.name ?? '',
+          productId: first?.id ?? null,
+          quantity: 1,
+        };
+      });
 
       days.push({
         dayIndex,
@@ -196,7 +202,7 @@ Rules:
     }
 
     return {
-      title: 'Personalized Meal Plan',
+      title: 'Pantry meal plan',
       days,
       raw: { fallback: true, profile: input.profile },
     };

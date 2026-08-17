@@ -3,6 +3,8 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import * as bcrypt from 'bcrypt';
 import {
   CreditAccountStatus,
+  EmployeeVerificationStatus,
+  EmployeeInviteStatus,
   Employer,
   LedgerEntryType,
   OrderCreditStatus,
@@ -11,18 +13,19 @@ import {
   UserRole,
   UserStatus,
 } from '../generated/prisma/client';
+import { seedMeasures } from './seed/measure-catalog';
+import { seedCategories, seedProducts } from './seed/upsert-catalog';
 
 function nairaToKobo(naira: number): number {
   return Math.round(naira * 100);
 }
 
 const DEMO_INVITE_CODE = 'DEMO01';
-/** creditLimit = floor(salaryKobo * 15000 / 10000) — mirrors src/credit/domain/money.ts. */
+
 function computeCreditLimitKobo(salaryKobo: number): number {
   return Math.floor((salaryKobo * 15_000) / 10_000);
 }
 
-/** Ensures the demo employer tenant (and its default credit policy) exist. */
 async function ensureDemoEmployer(prisma: PrismaClient): Promise<Employer> {
   const existing = await prisma.employer.findFirst({
     where: { inviteCode: DEMO_INVITE_CODE },
@@ -45,7 +48,6 @@ async function ensureDemoEmployer(prisma: PrismaClient): Promise<Employer> {
   return employer;
 }
 
-/** Ensures the demo employee's `User` row exists and belongs to `employer`. */
 async function ensureDemoEmployeeUser(prisma: PrismaClient, employer: Employer) {
   const email = 'jane.doe@demo.pantri';
   let user = await prisma.user.findUnique({ where: { email } });
@@ -102,377 +104,9 @@ async function main() {
     console.log(`Admin user already exists: ${email}`);
   }
 
-  const categoryDefs = [
-    {
-      name: 'Rice & Grains',
-      imageUrl:
-        'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=200&h=200&fit=crop',
-      accentColor: '#F5E6C8',
-      sortOrder: 0,
-      subs: ['Long Grain', 'Basmati', 'Local', 'Imported'],
-    },
-    {
-      name: 'Proteins',
-      imageUrl:
-        'https://images.unsplash.com/photo-1603048297172-c92544798d5a?w=200&h=200&fit=crop',
-      accentColor: '#F5D0D0',
-      sortOrder: 1,
-      subs: ['Beef', 'Chicken', 'Fish', 'Eggs'],
-    },
-    {
-      name: 'Oils & Fats',
-      imageUrl:
-        'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=200&h=200&fit=crop',
-      accentColor: '#F5DCC8',
-      sortOrder: 2,
-      subs: ['Vegetable Oil', 'Palm Oil', 'Olive Oil', 'Butter'],
-    },
-    {
-      name: 'Seasonings',
-      imageUrl:
-        'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=200&h=200&fit=crop',
-      accentColor: '#D4E8D4',
-      sortOrder: 3,
-      subs: ['Spices', 'Herbs', 'Stock Cubes', 'Salt'],
-    },
-    {
-      name: 'Drinks',
-      imageUrl:
-        'https://images.unsplash.com/photo-1544145945-f9042533c7e6?w=200&h=200&fit=crop',
-      accentColor: '#E0D4F0',
-      sortOrder: 4,
-      subs: ['Juice', 'Soft Drinks', 'Water', 'Tea'],
-    },
-    {
-      name: 'Canned Goods',
-      imageUrl:
-        'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=200&h=200&fit=crop',
-      accentColor: '#E0E0E0',
-      sortOrder: 5,
-      subs: ['Beans', 'Tomato', 'Fish', 'Vegetables'],
-    },
-  ] as const;
-
-  let categoryCount = await prisma.marketplaceCategory.count();
-  if (categoryCount === 0) {
-    await prisma.marketplaceCategory.createMany({
-      data: categoryDefs.map(({ name, imageUrl, accentColor, sortOrder }) => ({
-        name,
-        imageUrl,
-        accentColor,
-        sortOrder,
-        isActive: true,
-      })),
-    });
-    console.log('Seeded 6 marketplace categories');
-  } else {
-    console.log(`Marketplace categories already exist (${categoryCount})`);
-  }
-
-  const categories = await prisma.marketplaceCategory.findMany({
-    orderBy: { sortOrder: 'asc' },
-  });
-
-  const subcategoryCount = await prisma.marketplaceSubcategory.count();
-  if (subcategoryCount === 0) {
-    for (const cat of categories) {
-      const def = categoryDefs.find((d) => d.name === cat.name);
-      if (!def) continue;
-      await prisma.marketplaceSubcategory.createMany({
-        data: def.subs.map((name, index) => ({
-          categoryId: cat.id,
-          name,
-          sortOrder: index,
-          isActive: true,
-        })),
-      });
-    }
-    console.log('Seeded marketplace subcategories');
-  } else {
-    console.log(`Marketplace subcategories already exist (${subcategoryCount})`);
-  }
-
-  const productCount = await prisma.marketplaceProduct.count();
-  if (productCount === 0) {
-    const rice = categories.find((c) => c.name === 'Rice & Grains');
-    if (rice) {
-      const subs = await prisma.marketplaceSubcategory.findMany({
-        where: { categoryId: rice.id },
-        orderBy: { sortOrder: 'asc' },
-      });
-      const byName = Object.fromEntries(subs.map((s) => [s.name, s]));
-
-      const riceImage =
-        'https://images.unsplash.com/photo-1586201375761-83865001e31c?w=400&h=400&fit=crop';
-
-      const defaultNutrition = {
-        Calories: '130 kcal',
-        Carbohydrates: '28g',
-        Protein: '2.7g',
-        Fat: '0.3g',
-      };
-      const defaultPerfectFor = [
-        {
-          title: 'Party Jollof Rice',
-          description: 'Holds firm grains during slow cooking.',
-          imageUrl:
-            'https://images.unsplash.com/photo-1604329760661-e71dc83f8f26?w=200&h=200&fit=crop',
-        },
-        {
-          title: 'Classic Fried Rice',
-          description: 'Non-sticky texture, absorbs flavors.',
-          imageUrl:
-            'https://images.unsplash.com/photo-1603133872878-684f208fb84b?w=200&h=200&fit=crop',
-        },
-      ];
-
-      const products = [
-        {
-          sub: 'Long Grain',
-          name: 'Premium Long Grain Rice',
-          brand: 'Royal Farms',
-          packageLabel: '5kg',
-          price: 5800,
-          retail: 6500,
-          tags: ['rice', 'long grain', 'grain', 'staple'],
-          description:
-            'Premium long grain rice sourced from trusted Nigerian mills. Parboiled, stone-free, and cooks fluffy without sticking.',
-          origin: 'Benue, Nigeria',
-          bulk: 62,
-          verified: true,
-        },
-        {
-          sub: 'Long Grain',
-          name: 'Premium Long Grain Rice',
-          brand: 'Harvest Gold',
-          packageLabel: '10kg',
-          price: 10500,
-          retail: 12000,
-          tags: ['rice', 'long grain', 'bulk'],
-          description:
-            'Bulk-friendly long grain rice ideal for households. Clean, aromatic, and consistent grain length.',
-          origin: 'Kebbi, Nigeria',
-          bulk: 71,
-          verified: true,
-        },
-        {
-          sub: 'Long Grain',
-          name: 'Premium Long Grain Rice',
-          brand: 'Ogun Farms',
-          packageLabel: '25kg',
-          price: 24500,
-          retail: 28000,
-          tags: ['rice', 'long grain', 'wholesale'],
-          description:
-            'Wholesale sack of premium long grain rice for canteens and large families. Reliable quality in every bag.',
-          origin: 'Ogun, Nigeria',
-          bulk: 54,
-          verified: true,
-        },
-        {
-          sub: 'Basmati',
-          name: 'Aged Basmati Rice',
-          brand: 'Royal Farms',
-          packageLabel: '5kg',
-          price: 7200,
-          retail: 8500,
-          tags: ['rice', 'basmati', 'aromatic'],
-          description:
-            'Aged basmati with a fragrant aroma and elongated grains that stay separate when cooked.',
-          origin: 'Punjab, India',
-          bulk: 40,
-          verified: true,
-        },
-        {
-          sub: 'Basmati',
-          name: 'Fragrant Basmati Rice',
-          brand: 'Harvest Gold',
-          packageLabel: '10kg',
-          price: 13800,
-          retail: 16000,
-          tags: ['rice', 'basmati', 'imported'],
-          description:
-            'Imported fragrant basmati for special meals. Light texture with classic nutty notes.',
-          origin: 'India',
-          bulk: 48,
-          verified: false,
-        },
-        {
-          sub: 'Local',
-          name: 'Ofada Local Rice',
-          brand: 'Ogun Farms',
-          packageLabel: '5kg',
-          price: 4500,
-          retail: 5200,
-          tags: ['rice', 'local', 'ofada'],
-          description:
-            'Authentic Ofada rice with a distinctive aroma, perfect for traditional Nigerian sauces.',
-          origin: 'Ogun, Nigeria',
-          bulk: 35,
-          verified: true,
-        },
-        {
-          sub: 'Local',
-          name: 'Nigerian Local Rice',
-          brand: 'Benue Mills',
-          packageLabel: '10kg',
-          price: 8200,
-          retail: 9500,
-          tags: ['rice', 'local', 'nigeria'],
-          description:
-            'Locally milled Nigerian rice with firm grains suited for everyday family cooking.',
-          origin: 'Benue, Nigeria',
-          bulk: 58,
-          verified: true,
-        },
-        {
-          sub: 'Imported',
-          name: 'Thai Jasmine Rice',
-          brand: 'Golden Gate',
-          packageLabel: '5kg',
-          price: 6800,
-          retail: 7800,
-          tags: ['rice', 'imported', 'jasmine'],
-          description:
-            'Soft, slightly sticky jasmine rice with a floral aroma — excellent for Thai-inspired dishes.',
-          origin: 'Thailand',
-          bulk: 44,
-          verified: true,
-        },
-        {
-          sub: 'Imported',
-          name: 'Indian Parboiled Rice',
-          brand: 'Royal Farms',
-          packageLabel: '25kg',
-          price: 26500,
-          retail: 30000,
-          tags: ['rice', 'imported', 'parboiled'],
-          description:
-            'Parboiled Indian rice that holds shape through long simmering — ideal for jollof and party trays.',
-          origin: 'India',
-          bulk: 66,
-          verified: true,
-        },
-        {
-          sub: 'Long Grain',
-          name: 'Premium Long Grain Rice',
-          brand: 'Aurora',
-          packageLabel: '50kg',
-          price: 45000,
-          retail: 52000,
-          tags: ['rice', 'long grain', 'family', 'bulk'],
-          description:
-            'Sourced from Benue State farms, this premium parboiled long grain rice is stone-free and cooks fluffy with a non-sticky finish — built for bulk household and catering use.',
-          origin: 'Benue, Nigeria',
-          bulk: 85,
-          verified: true,
-        },
-      ];
-
-      let order = 0;
-      let showcaseProductId: string | null = null;
-      const expiresAt = new Date('2025-12-31T00:00:00.000Z');
-      for (const p of products) {
-        const sub = byName[p.sub];
-        if (!sub) continue;
-        const created = await prisma.marketplaceProduct.create({
-          data: {
-            categoryId: rice.id,
-            subcategoryId: sub.id,
-            name: p.name,
-            brand: p.brand,
-            packageLabel: p.packageLabel,
-            imageUrl: riceImage,
-            priceKobo: nairaToKobo(p.price),
-            retailPriceKobo: nairaToKobo(p.retail),
-            description: p.description,
-            origin: p.origin,
-            expiresAt,
-            isVerified: p.verified,
-            bulkAllocationClaimedPercent: p.bulk,
-            nutritionFacts: defaultNutrition,
-            perfectFor: defaultPerfectFor,
-            tags: p.tags,
-            sortOrder: order++,
-            isActive: true,
-          },
-        });
-        if (p.packageLabel === '50kg' && p.brand === 'Aurora') {
-          showcaseProductId = created.id;
-        }
-      }
-      console.log(`Seeded ${order} rice products`);
-
-      if (showcaseProductId) {
-        const employer = await ensureDemoEmployer(prisma);
-        const employeeUser = await ensureDemoEmployeeUser(prisma, employer);
-
-        const reviewCount = await prisma.productReview.count({
-          where: { productId: showcaseProductId },
-        });
-        if (reviewCount === 0) {
-          await prisma.productReview.create({
-            data: {
-              productId: showcaseProductId,
-              userId: employeeUser.id,
-              rating: 5,
-              body: 'Exceptional quality. Bought in bulk for a small café — packaging was secure and I will reorder through PantryPay.',
-              helpfulCount: 12,
-            },
-          });
-          console.log('Seeded sample product reviews');
-        }
-      }
-    }
-  } else {
-    console.log(`Marketplace products already exist (${productCount})`);
-
-    const blank = await prisma.marketplaceProduct.findMany({
-      where: { description: '' },
-      take: 50,
-    });
-    if (blank.length > 0) {
-      const nutrition = {
-        Calories: '130 kcal',
-        Carbohydrates: '28g',
-        Protein: '2.7g',
-        Fat: '0.3g',
-      };
-      const perfectFor = [
-        {
-          title: 'Party Jollof Rice',
-          description: 'Holds firm grains during slow cooking.',
-          imageUrl:
-            'https://images.unsplash.com/photo-1604329760661-e71dc83f8f26?w=200&h=200&fit=crop',
-        },
-        {
-          title: 'Classic Fried Rice',
-          description: 'Non-sticky texture, absorbs flavors.',
-          imageUrl:
-            'https://images.unsplash.com/photo-1603133872878-684f208fb84b?w=200&h=200&fit=crop',
-        },
-      ];
-      const expiresAt = new Date('2025-12-31T00:00:00.000Z');
-      for (const product of blank) {
-        await prisma.marketplaceProduct.update({
-          where: { id: product.id },
-          data: {
-            description:
-              product.description ||
-              `Premium ${product.name} (${product.packageLabel}) from ${product.brand}. Clean, stone-free grains ideal for everyday and party cooking.`,
-            origin: product.origin || 'Benue, Nigeria',
-            expiresAt: product.expiresAt ?? expiresAt,
-            isVerified: true,
-            bulkAllocationClaimedPercent:
-              product.bulkAllocationClaimedPercent || 75,
-            nutritionFacts: nutrition,
-            perfectFor,
-          },
-        });
-      }
-      console.log(`Backfilled detail fields on ${blank.length} products`);
-    }
-  }
+  await seedMeasures(prisma);
+  await seedCategories(prisma);
+  await seedProducts(prisma);
 
   const bannerCount = await prisma.marketplaceBanner.count();
   if (bannerCount === 0) {
@@ -541,19 +175,19 @@ async function main() {
     where: { kind: 'CURATED' },
   });
   if (packageCount === 0) {
-    const products = await prisma.marketplaceProduct.findMany({
-      where: { isActive: true },
+    const packs = await prisma.productPack.findMany({
+      where: { isActive: true, product: { isActive: true } },
       orderBy: { sortOrder: 'asc' },
-      take: 10,
+      take: 12,
     });
 
     const pick = (...indexes: number[]) =>
       indexes
         .map((i, sortOrder) => {
-          const product = products[i % Math.max(products.length, 1)];
-          if (!product) return null;
+          const pack = packs[i % Math.max(packs.length, 1)];
+          if (!pack) return null;
           return {
-            productId: product.id,
+            packId: pack.id,
             quantity: 1 + (sortOrder % 2),
             sortOrder,
           };
@@ -619,7 +253,7 @@ async function main() {
       },
     ] as const;
 
-    if (products.length > 0) {
+    if (packs.length > 0) {
       for (const pkg of curated) {
         await prisma.pantryPackage.create({
           data: {
@@ -638,13 +272,12 @@ async function main() {
       }
       console.log(`Seeded ${curated.length} curated packages`);
     } else {
-      console.log('Skipped curated packages seed (no products)');
+      console.log('Skipped curated packages seed (no packs)');
     }
   } else {
     console.log(`Curated packages already exist (${packageCount})`);
   }
 
-  // --- Nutrition catalogs: allergies + primary goals ---
   {
     const allergies = [
       { name: 'Peanuts', slug: 'peanuts', sortOrder: 1 },
@@ -726,7 +359,6 @@ async function main() {
     console.log(`Seeded ${goals.length} primary goals`);
   }
 
-  // --- Employee dashboard demo: revolving credit account + fulfilled order + ledger ---
   {
     const employer = await ensureDemoEmployer(prisma);
     const employeeUser = await ensureDemoEmployeeUser(prisma, employer);
@@ -738,7 +370,10 @@ async function main() {
         userId: employeeUser.id,
         employerId: employer.id,
         salaryKobo: defaultSalaryKobo,
+        creditMultiplierBps: 15_000,
         deductionPercent: 20,
+        verificationStatus: EmployeeVerificationStatus.APPROVED,
+        verifiedAt: new Date(),
         addressLine: '12 Admiralty Way',
         city: 'Lekki',
         state: 'Lagos',
@@ -747,8 +382,49 @@ async function main() {
       },
       update: {
         employerId: employer.id,
+        verificationStatus: EmployeeVerificationStatus.APPROVED,
+        salaryKobo: defaultSalaryKobo,
+        creditMultiplierBps: 15_000,
       },
     });
+
+    // Per-person demo invite for onboarding walkthroughs (single-use when consumed).
+    const demoPersonInvite = await prisma.employeeInvite.findFirst({
+      where: { employerId: employer.id, code: 'JOINME01' },
+    });
+    if (!demoPersonInvite) {
+      await prisma.employeeInvite.create({
+        data: {
+          employerId: employer.id,
+          code: 'JOINME01',
+          email: 'new.hire@demo.pantri',
+          phone: '08030000000',
+          status: EmployeeInviteStatus.PENDING,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        },
+      });
+      console.log('Seeded per-person invite JOINME01 → new.hire@demo.pantri');
+    }
+
+    // Nutritionist account (meal-plan review/activate).
+    const nutritionistEmail = 'nutritionist@pantri.app';
+    const existingNutritionist = await prisma.user.findUnique({
+      where: { email: nutritionistEmail },
+    });
+    if (!existingNutritionist) {
+      await prisma.user.create({
+        data: {
+          email: nutritionistEmail,
+          passwordHash: await bcrypt.hash('Nutrition123!', 12),
+          firstName: 'Ngozi',
+          lastName: 'Adeyemi',
+          role: UserRole.NUTRITIONIST,
+          status: UserStatus.ACTIVE,
+          platformRole: 'NUTRITIONIST',
+        },
+      });
+      console.log(`Seeded NUTRITIONIST user: ${nutritionistEmail}`);
+    }
 
     const salaryHistoryCount = await prisma.salaryHistory.count({
       where: { employeeId: employee.id },
@@ -821,9 +497,6 @@ async function main() {
         },
       });
 
-      // Post the purchase straight to the ledger for this demo (revolving
-      // credit, no per-order installment plan — see PayrollModule for the
-      // real payroll-cycle repayment flow).
       await prisma.creditAccount.update({
         where: { id: creditAccount.id },
         data: {

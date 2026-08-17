@@ -15,19 +15,44 @@ type CartWithItems = {
   updatedAt: Date;
   items: Array<{
     id: string;
-    productId: string;
+    packId: string;
     quantity: number;
     unitPriceKobo: number;
-    product: {
-      name: string;
+    pack: {
       brand: string;
       packageLabel: string;
       imageUrl: string;
       retailPriceKobo: number;
       isActive: boolean;
       priceKobo: number;
+      product: {
+        id: string;
+        name: string;
+        isActive: boolean;
+        imageUrl: string;
+      };
     };
   }>;
+};
+
+const cartItemInclude = {
+  items: {
+    include: {
+      pack: {
+        include: {
+          product: {
+            select: {
+              id: true,
+              name: true,
+              isActive: true,
+              imageUrl: true,
+            },
+          },
+        },
+      },
+    },
+    orderBy: { createdAt: 'asc' as const },
+  },
 };
 
 @Injectable()
@@ -46,11 +71,15 @@ export class CartService {
     userId: string,
     dto: AddCartItemDto,
   ): Promise<CartResponseDto> {
-    const product = await this.prisma.marketplaceProduct.findFirst({
-      where: { id: dto.productId, isActive: true },
+    const pack = await this.prisma.productPack.findFirst({
+      where: {
+        id: dto.packId,
+        isActive: true,
+        product: { isActive: true },
+      },
     });
-    if (!product) {
-      throw new NotFoundException('Product not found');
+    if (!pack) {
+      throw new NotFoundException('Pack not found');
     }
 
     const quantity = dto.quantity ?? 1;
@@ -58,7 +87,7 @@ export class CartService {
 
     const existing = await this.prisma.cartItem.findUnique({
       where: {
-        cartId_productId: { cartId: cart.id, productId: product.id },
+        cartId_packId: { cartId: cart.id, packId: pack.id },
       },
     });
 
@@ -67,16 +96,16 @@ export class CartService {
         where: { id: existing.id },
         data: {
           quantity: existing.quantity + quantity,
-          unitPriceKobo: product.priceKobo,
+          unitPriceKobo: pack.priceKobo,
         },
       });
     } else {
       await this.prisma.cartItem.create({
         data: {
           cartId: cart.id,
-          productId: product.id,
+          packId: pack.id,
           quantity,
-          unitPriceKobo: product.priceKobo,
+          unitPriceKobo: pack.priceKobo,
         },
       });
     }
@@ -86,13 +115,13 @@ export class CartService {
 
   async updateItem(
     userId: string,
-    productId: string,
+    packId: string,
     dto: UpdateCartItemDto,
   ): Promise<CartResponseDto> {
     const cart = await this.getOrCreateCart(userId);
     const item = await this.prisma.cartItem.findUnique({
       where: {
-        cartId_productId: { cartId: cart.id, productId },
+        cartId_packId: { cartId: cart.id, packId },
       },
     });
     if (!item) {
@@ -111,14 +140,11 @@ export class CartService {
     return this.getCart(userId);
   }
 
-  async removeItem(
-    userId: string,
-    productId: string,
-  ): Promise<CartResponseDto> {
+  async removeItem(userId: string, packId: string): Promise<CartResponseDto> {
     const cart = await this.getOrCreateCart(userId);
     const item = await this.prisma.cartItem.findUnique({
       where: {
-        cartId_productId: { cartId: cart.id, productId },
+        cartId_packId: { cartId: cart.id, packId },
       },
     });
     if (!item) {
@@ -138,24 +164,7 @@ export class CartService {
   private async getOrCreateCart(userId: string): Promise<CartWithItems> {
     const existing = await this.prisma.cart.findUnique({
       where: { userId },
-      include: {
-        items: {
-          include: {
-            product: {
-              select: {
-                name: true,
-                brand: true,
-                packageLabel: true,
-                imageUrl: true,
-                retailPriceKobo: true,
-                isActive: true,
-                priceKobo: true,
-              },
-            },
-          },
-          orderBy: { createdAt: 'asc' },
-        },
-      },
+      include: cartItemInclude,
     });
 
     if (existing) {
@@ -164,43 +173,26 @@ export class CartService {
 
     return this.prisma.cart.create({
       data: { userId },
-      include: {
-        items: {
-          include: {
-            product: {
-              select: {
-                name: true,
-                brand: true,
-                packageLabel: true,
-                imageUrl: true,
-                retailPriceKobo: true,
-                isActive: true,
-                priceKobo: true,
-              },
-            },
-          },
-          orderBy: { createdAt: 'asc' },
-        },
-      },
+      include: cartItemInclude,
     });
   }
 
   private async toCartDto(cart: CartWithItems): Promise<CartResponseDto> {
     const items: CartItemResponseDto[] = cart.items.map((item) => {
-      const unitPrice = item.product.isActive
-        ? item.product.priceKobo
-        : item.unitPriceKobo;
+      const available = item.pack.isActive && item.pack.product.isActive;
+      const unitPrice = available ? item.pack.priceKobo : item.unitPriceKobo;
       return {
         id: item.id,
-        productId: item.productId,
-        name: item.product.name,
-        brand: item.product.brand,
-        packageLabel: item.product.packageLabel,
-        imageUrl: item.product.imageUrl,
+        packId: item.packId,
+        productId: item.pack.product.id,
+        name: item.pack.product.name,
+        brand: item.pack.brand,
+        packageLabel: item.pack.packageLabel,
+        imageUrl: item.pack.imageUrl || item.pack.product.imageUrl,
         quantity: item.quantity,
         unitPriceKobo: unitPrice,
         lineTotalKobo: unitPrice * item.quantity,
-        retailPriceKobo: item.product.retailPriceKobo,
+        retailPriceKobo: item.pack.retailPriceKobo,
       };
     });
 

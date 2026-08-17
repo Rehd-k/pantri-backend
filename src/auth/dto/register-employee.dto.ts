@@ -1,11 +1,8 @@
-import { Type } from 'class-transformer';
 import {
   IsEmail,
-  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
-  Min,
   MinLength,
 } from 'class-validator';
 
@@ -31,10 +28,8 @@ export class RegisterEmployeeDto {
   @IsNotEmpty()
   inviteCode!: string;
 
-  /** Optional monthly salary in kobo; falls back to a platform default when omitted. */
+  /** Optional; must match invite when the invite was phone-bound. */
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  salaryKobo?: number;
+  @IsString()
+  phone?: string;
 }

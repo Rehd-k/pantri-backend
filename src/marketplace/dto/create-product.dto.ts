@@ -14,6 +14,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PerfectForItemDto } from './perfect-for-item.dto';
+import { CreateProductPackDto } from './product-pack.dto';
 
 export class CreateProductDto {
   @IsString()
@@ -26,29 +27,19 @@ export class CreateProductDto {
 
   @IsString()
   @IsNotEmpty()
+  measureFamilyId!: string;
+
+  @IsString()
+  @IsNotEmpty()
   name!: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  brand!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  packageLabel!: string;
+  slug?: string;
 
   @IsString()
   @IsNotEmpty()
   imageUrl!: string;
-
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  priceKobo!: number;
-
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  retailPriceKobo!: number;
 
   @IsOptional()
   @IsString()
@@ -57,6 +48,18 @@ export class CreateProductDto {
   @IsOptional()
   @IsString()
   origin?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  recipeUnitOverrideMg?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  recipeUnitOverrideMl?: number | null;
 
   @IsOptional()
   @IsDateString()
@@ -89,6 +92,12 @@ export class CreateProductDto {
   @IsString({ each: true })
   @ArrayMaxSize(30)
   tags?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateProductPackDto)
+  packs?: CreateProductPackDto[];
 
   @IsOptional()
   @Type(() => Number)

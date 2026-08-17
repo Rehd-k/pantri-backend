@@ -4,6 +4,7 @@ import type {
   MarketplaceCategory,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { slugify } from '../common/slug';
 import { BannerResponseDto } from './dto/banner-response.dto';
 import { CategoryResponseDto } from './dto/category-response.dto';
 import { CreateBannerDto } from './dto/create-banner.dto';
@@ -52,9 +53,11 @@ export class MarketplaceService {
   async createCategory(dto: CreateCategoryDto): Promise<CategoryResponseDto> {
     const sortOrder =
       dto.sortOrder ?? (await this.nextCategorySortOrder());
+    const slug = await this.uniqueCategorySlug(dto.slug || dto.name);
 
     const row = await this.prisma.marketplaceCategory.create({
       data: {
+        slug,
         name: dto.name,
         imageUrl: dto.imageUrl,
         accentColor: dto.accentColor,
@@ -72,10 +75,16 @@ export class MarketplaceService {
   ): Promise<CategoryResponseDto> {
     await this.requireCategory(id);
 
+    const slug =
+      dto.slug !== undefined
+        ? await this.uniqueCategorySlug(dto.slug, id)
+        : undefined;
+
     const row = await this.prisma.marketplaceCategory.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name } : {}),
+        ...(slug !== undefined ? { slug } : {}),
         ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
         ...(dto.accentColor !== undefined
           ? { accentColor: dto.accentColor }
@@ -194,9 +203,27 @@ export class MarketplaceService {
     return (last?.sortOrder ?? -1) + 1;
   }
 
+  private async uniqueCategorySlug(
+    raw: string,
+    excludeId?: string,
+  ): Promise<string> {
+    const base = slugify(raw, 'category');
+    let candidate = base;
+    let n = 2;
+    while (true) {
+      const clash = await this.prisma.marketplaceCategory.findUnique({
+        where: { slug: candidate },
+        select: { id: true },
+      });
+      if (!clash || clash.id === excludeId) return candidate;
+      candidate = `${base}-${n++}`;
+    }
+  }
+
   private toCategoryDto(row: MarketplaceCategory): CategoryResponseDto {
     return {
       id: row.id,
+      slug: row.slug,
       name: row.name,
       imageUrl: row.imageUrl,
       accentColor: row.accentColor,

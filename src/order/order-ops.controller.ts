@@ -121,6 +121,24 @@ export class OrderOpsController {
     return toOrderResponseDto(order);
   }
 
+  @Post(':id/transition')
+  @Roles(UserRole.EMPLOYER, UserRole.ADMIN, UserRole.LOGISTICS)
+  async transition(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('id') id: string,
+    @Body() body: { status: OrderFulfillmentStatus; note?: string },
+  ): Promise<OrderResponseDto> {
+    const employerId = await this.resolveEmployerScope(user);
+    const order = await this.orderService.transitionFulfillmentStatus(
+      id,
+      body.status,
+      user.id,
+      body.note,
+      employerId,
+    );
+    return toOrderResponseDto(order);
+  }
+
   /** EMPLOYER staff are scoped to their resolved tenant; ADMIN/LOGISTICS bypass employer scoping (status transitions still enforce validity). */
   private async resolveEmployerScope(
     user: AuthUserPayload,

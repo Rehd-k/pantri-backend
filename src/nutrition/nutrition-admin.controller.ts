@@ -35,7 +35,6 @@ import { NutritionCatalogService } from './nutrition-catalog.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN)
 export class NutritionAdminController {
   constructor(
     private readonly catalogService: NutritionCatalogService,
@@ -43,16 +42,19 @@ export class NutritionAdminController {
   ) {}
 
   @Get('nutrition/allergies')
+  @Roles(UserRole.ADMIN)
   listAllergies(): Promise<AllergyResponseDto[]> {
     return this.catalogService.listAllergies(false);
   }
 
   @Post('nutrition/allergies')
+  @Roles(UserRole.ADMIN)
   createAllergy(@Body() dto: CreateAllergyDto): Promise<AllergyResponseDto> {
     return this.catalogService.createAllergy(dto);
   }
 
   @Patch('nutrition/allergies/:id')
+  @Roles(UserRole.ADMIN)
   updateAllergy(
     @Param('id') id: string,
     @Body() dto: UpdateAllergyDto,
@@ -61,16 +63,19 @@ export class NutritionAdminController {
   }
 
   @Patch('nutrition/allergies/:id/deactivate')
+  @Roles(UserRole.ADMIN)
   deactivateAllergy(@Param('id') id: string): Promise<AllergyResponseDto> {
     return this.catalogService.deactivateAllergy(id);
   }
 
   @Get('nutrition/goals')
+  @Roles(UserRole.ADMIN)
   listGoals(): Promise<PrimaryGoalResponseDto[]> {
     return this.catalogService.listGoals(false);
   }
 
   @Post('nutrition/goals')
+  @Roles(UserRole.ADMIN)
   createGoal(
     @Body() dto: CreatePrimaryGoalDto,
   ): Promise<PrimaryGoalResponseDto> {
@@ -78,6 +83,7 @@ export class NutritionAdminController {
   }
 
   @Patch('nutrition/goals/:id')
+  @Roles(UserRole.ADMIN)
   updateGoal(
     @Param('id') id: string,
     @Body() dto: UpdatePrimaryGoalDto,
@@ -86,11 +92,13 @@ export class NutritionAdminController {
   }
 
   @Patch('nutrition/goals/:id/deactivate')
+  @Roles(UserRole.ADMIN)
   deactivateGoal(@Param('id') id: string): Promise<PrimaryGoalResponseDto> {
     return this.catalogService.deactivateGoal(id);
   }
 
   @Get('marketplace/products/:id/allergens')
+  @Roles(UserRole.ADMIN)
   getProductAllergens(
     @Param('id') id: string,
   ): Promise<{ productId: string; allergyIds: string[] }> {
@@ -101,6 +109,7 @@ export class NutritionAdminController {
   }
 
   @Patch('marketplace/products/:id/allergens')
+  @Roles(UserRole.ADMIN)
   setProductAllergens(
     @Param('id') id: string,
     @Body() dto: SetProductAllergensDto,
@@ -109,6 +118,7 @@ export class NutritionAdminController {
   }
 
   @Get('meal-plans')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
   listMealPlans(
     @Query() query: ListMealPlansQueryDto,
   ): Promise<MealPlanSummaryDto[]> {
@@ -116,11 +126,13 @@ export class NutritionAdminController {
   }
 
   @Get('meal-plans/:id')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
   getMealPlan(@Param('id') id: string): Promise<MealPlanDetailDto> {
     return this.mealPlanService.getAdmin(id);
   }
 
   @Post('meal-plans/:id/approve')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
   approveMealPlan(
     @CurrentUser() user: AuthUserPayload,
     @Param('id') id: string,
@@ -130,6 +142,7 @@ export class NutritionAdminController {
   }
 
   @Post('meal-plans/:id/reject')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
   rejectMealPlan(
     @CurrentUser() user: AuthUserPayload,
     @Param('id') id: string,

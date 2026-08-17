@@ -18,6 +18,7 @@ import {
 } from '../../generated/prisma/client';
 import { EmployeeService } from '../identity/employee.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { EmployeeInviteService } from '../verification/employee-invite.service';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { AuthUserDto } from './dto/auth-user.dto';
 import { LoginDto } from './dto/login.dto';
@@ -26,10 +27,14 @@ import { RegisterEmployerDto } from './dto/register-employer.dto';
 import { RegisterLogisticsDto } from './dto/register-logistics.dto';
 import { RegisterSupplierDto } from './dto/register-supplier.dto';
 
-type UserWithEmployer = User & { employer: Employer | null };
-
-/** Assumed monthly salary (₦500,000) for employees who register without providing one. */
-const DEFAULT_EMPLOYEE_SALARY_KOBO = 500_000_00;
+type UserWithEmployer = User & {
+  employer: Employer | null;
+  employee?: {
+    id: string;
+    verificationStatus: string;
+    phone: string | null;
+  } | null;
+};
 
 @Injectable()
 export class AuthService {
@@ -40,12 +45,13 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
     private readonly employeeService: EmployeeService,
+    private readonly employeeInvites: EmployeeInviteService,
   ) {}
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
-      include: { employer: true },
+      include: { employer: true, employee: true },
     });
 
     if (!user) {
@@ -116,33 +122,59 @@ export class AuthService {
   async registerEmployee(dto: RegisterEmployeeDto): Promise<AuthResponseDto> {
     await this.ensureEmailAvailable(dto.email);
 
-    const employer = await this.prisma.employer.findUnique({
-      where: { inviteCode: dto.inviteCode.trim().toUpperCase() },
-    });
-
-    if (!employer) {
-      throw new NotFoundException('Invalid employer invite code');
+    const invite = await this.employeeInvites.findValidInviteByCode(
+      dto.inviteCode,
+    );
+    const email = dto.email.toLowerCase().trim();
+    if (invite.email.toLowerCase() !== email) {
+      throw new ConflictException(
+        'This invite is bound to a different email address',
+      );
+    }
+    if (
+      invite.phone &&
+      dto.phone &&
+      invite.phone.replace(/\D/g, '') !== dto.phone.replace(/\D/g, '')
+    ) {
+      throw new ConflictException(
+        'This invite is bound to a different phone number',
+      );
+    }
+    if (invite.phone && !dto.phone) {
+      throw new ConflictException(
+        'This invite requires the phone number it was issued for',
+      );
     }
 
     const passwordHash = await bcrypt.hash(dto.password, this.bcryptRounds);
 
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email.toLowerCase(),
+        email,
         passwordHash,
         firstName: dto.firstName.trim(),
         lastName: dto.lastName.trim(),
         role: UserRole.EMPLOYEE,
         status: UserStatus.ACTIVE,
-        employerId: employer.id,
+        employerId: invite.employerId,
       },
-      include: { employer: true },
+      include: { employer: true, employee: true },
     });
 
     const { employee } = await this.employeeService.createEmployeeWithAccount({
       userId: user.id,
-      employerId: employer.id,
-      salaryKobo: dto.salaryKobo ?? DEFAULT_EMPLOYEE_SALARY_KOBO,
+      employerId: invite.employerId,
+      salaryKobo: 0,
+      phone: dto.phone?.trim() || invite.phone || null,
+      verificationPending: true,
+    });
+
+    await this.employeeInvites.consumeInvite({
+      code: invite.code,
+      email,
+      phone: dto.phone ?? invite.phone,
+      userId: user.id,
+      employeeId: employee.id,
     });
 
     await this.prisma.riskProfile.upsert({
@@ -151,7 +183,12 @@ export class AuthService {
       update: {},
     });
 
-    return this.buildAuthResponse(user);
+    const refreshed = await this.prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+      include: { employer: true, employee: true },
+    });
+
+    return this.buildAuthResponse(refreshed);
   }
 
   async registerSupplier(dto: RegisterSupplierDto): Promise<AuthResponseDto> {
@@ -201,7 +238,7 @@ export class AuthService {
   async getMe(userId: string): Promise<AuthUserDto> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { employer: true },
+      include: { employer: true, employee: true },
     });
 
     if (!user) {
@@ -214,7 +251,7 @@ export class AuthService {
   async findUserById(userId: string): Promise<UserWithEmployer | null> {
     return this.prisma.user.findUnique({
       where: { id: userId },
-      include: { employer: true },
+      include: { employer: true, employee: true },
     });
   }
 
@@ -282,6 +319,9 @@ export class AuthService {
       companyInviteCode: employerInviteCode,
       businessName: user.businessName,
       fleetName: user.fleetName,
+      employeeId: user.employee?.id ?? null,
+      verificationStatus: user.employee?.verificationStatus ?? null,
+      phone: user.employee?.phone ?? null,
     };
   }
 }

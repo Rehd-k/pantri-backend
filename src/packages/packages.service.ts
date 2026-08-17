@@ -35,16 +35,16 @@ import { PackagePricingService } from './package-pricing.service';
 const packageInclude = {
   items: {
     include: {
-      product: {
-        select: {
-          id: true,
-          name: true,
-          brand: true,
-          packageLabel: true,
-          imageUrl: true,
-          priceKobo: true,
-          retailPriceKobo: true,
-          isActive: true,
+      pack: {
+        include: {
+          product: {
+            select: {
+              id: true,
+              name: true,
+              imageUrl: true,
+              isActive: true,
+            },
+          },
         },
       },
     },
@@ -156,7 +156,7 @@ export class PackagesService {
     userId: string,
     dto: CreateCommunityPackageDto,
   ): Promise<PackageResponseDto> {
-    await this.assertProductsExist(dto.items);
+    await this.assertPacksExist(dto.items);
     const shareSlug = await this.uniqueSlug(dto.name);
 
     const pkg = await this.prisma.pantryPackage.create({
@@ -171,7 +171,7 @@ export class PackagesService {
         isActive: true,
         items: {
           create: dto.items.map((item, index) => ({
-            productId: item.productId,
+            packId: item.packId,
             quantity: item.quantity,
             sortOrder: item.sortOrder ?? index,
           })),
@@ -197,7 +197,7 @@ export class PackagesService {
     }
 
     if (dto.items) {
-      await this.assertProductsExist(dto.items);
+      await this.assertPacksExist(dto.items);
     }
 
     const pkg = await this.prisma.$transaction(async (tx) => {
@@ -206,7 +206,7 @@ export class PackagesService {
         await tx.packageItem.createMany({
           data: dto.items.map((item, index) => ({
             packageId: id,
-            productId: item.productId,
+            packId: item.packId,
             quantity: item.quantity,
             sortOrder: item.sortOrder ?? index,
           })),
@@ -245,46 +245,51 @@ export class PackagesService {
       items?.length && items.length > 0
         ? items
         : pkg.items.map((i) => ({
-            productId: i.productId,
+            packId: i.packId,
             quantity: i.quantity,
             sortOrder: i.sortOrder,
           }));
-    await this.assertProductsExist(resolved);
+    await this.assertPacksExist(resolved);
 
-    const products = await this.prisma.marketplaceProduct.findMany({
+    const packs = await this.prisma.productPack.findMany({
       where: {
-        id: { in: resolved.map((i) => i.productId) },
+        id: { in: resolved.map((i) => i.packId) },
         isActive: true,
+        product: { isActive: true },
+      },
+      include: {
+        product: { select: { id: true, name: true, imageUrl: true } },
       },
     });
-    const byId = Object.fromEntries(products.map((p) => [p.id, p]));
+    const byId = Object.fromEntries(packs.map((p) => [p.id, p]));
 
     const syntheticItems: PackageItemResponseDto[] = resolved.map(
       (item, index) => {
-        const product = byId[item.productId];
-        if (!product) {
-          throw new BadRequestException(`Product not found: ${item.productId}`);
+        const pack = byId[item.packId];
+        if (!pack) {
+          throw new BadRequestException(`Pack not found: ${item.packId}`);
         }
         return {
           id: `preview-${index}`,
-          productId: product.id,
+          packId: pack.id,
+          productId: pack.product.id,
           quantity: item.quantity,
           sortOrder: item.sortOrder ?? index,
-          name: product.name,
-          brand: product.brand,
-          packageLabel: product.packageLabel,
-          imageUrl: product.imageUrl,
-          priceKobo: product.priceKobo,
-          retailPriceKobo: product.retailPriceKobo,
-          lineWholesaleKobo: product.priceKobo * item.quantity,
-          lineRetailKobo: product.retailPriceKobo * item.quantity,
+          name: pack.product.name,
+          brand: pack.brand,
+          packageLabel: pack.packageLabel,
+          imageUrl: pack.imageUrl || pack.product.imageUrl,
+          priceKobo: pack.priceKobo,
+          retailPriceKobo: pack.retailPriceKobo,
+          lineWholesaleKobo: pack.priceKobo * item.quantity,
+          lineRetailKobo: pack.retailPriceKobo * item.quantity,
         };
       },
     );
 
     const pricing = await this.pricing.computePricing(
       syntheticItems.map((i) => ({
-        productId: i.productId,
+        packId: i.packId,
         quantity: i.quantity,
         priceKobo: i.priceKobo,
         retailPriceKobo: i.retailPriceKobo,
@@ -313,15 +318,15 @@ export class PackagesService {
       overrides?.length && overrides.length > 0
         ? overrides
         : pkg.items.map((i) => ({
-            productId: i.productId,
+            packId: i.packId,
             quantity: i.quantity,
           }));
 
-    await this.assertProductsExist(lines);
+    await this.assertPacksExist(lines);
 
     for (const line of lines) {
       await this.cartService.addItem(userId, {
-        productId: line.productId,
+        packId: line.packId,
         quantity: line.quantity,
       });
     }
@@ -381,7 +386,7 @@ export class PackagesService {
   async adminCreatePackage(
     dto: CreateAdminPackageDto,
   ): Promise<PackageResponseDto> {
-    await this.assertProductsExist(dto.items);
+    await this.assertPacksExist(dto.items);
     const shareSlug = await this.uniqueSlug(dto.name);
 
     const pkg = await this.prisma.pantryPackage.create({
@@ -397,7 +402,7 @@ export class PackagesService {
         shareSlug,
         items: {
           create: dto.items.map((item, index) => ({
-            productId: item.productId,
+            packId: item.packId,
             quantity: item.quantity,
             sortOrder: item.sortOrder ?? index,
           })),
@@ -419,7 +424,7 @@ export class PackagesService {
     }
 
     if (dto.items) {
-      await this.assertProductsExist(dto.items);
+      await this.assertPacksExist(dto.items);
     }
 
     const pkg = await this.prisma.$transaction(async (tx) => {
@@ -428,7 +433,7 @@ export class PackagesService {
         await tx.packageItem.createMany({
           data: dto.items.map((item, index) => ({
             packageId: id,
-            productId: item.productId,
+            packId: item.packId,
             quantity: item.quantity,
             sortOrder: item.sortOrder ?? index,
           })),
@@ -566,18 +571,22 @@ export class PackagesService {
     throw new NotFoundException('Package not found');
   }
 
-  private async assertProductsExist(
+  private async assertPacksExist(
     items: PackageItemInputDto[],
   ): Promise<void> {
-    const ids = [...new Set(items.map((i) => i.productId))];
+    const ids = [...new Set(items.map((i) => i.packId))];
     if (ids.length === 0) {
       throw new BadRequestException('At least one item is required');
     }
-    const count = await this.prisma.marketplaceProduct.count({
-      where: { id: { in: ids }, isActive: true },
+    const count = await this.prisma.productPack.count({
+      where: {
+        id: { in: ids },
+        isActive: true,
+        product: { isActive: true },
+      },
     });
     if (count !== ids.length) {
-      throw new BadRequestException('One or more products are invalid');
+      throw new BadRequestException('One or more packs are invalid');
     }
   }
 
@@ -631,20 +640,21 @@ export class PackagesService {
     pkg: PackageWithRelations,
   ): PackageItemResponseDto[] {
     return pkg.items
-      .filter((i) => i.product.isActive)
+      .filter((i) => i.pack.isActive && i.pack.product.isActive)
       .map((item) => ({
         id: item.id,
-        productId: item.productId,
+        packId: item.packId,
+        productId: item.pack.product.id,
         quantity: item.quantity,
         sortOrder: item.sortOrder,
-        name: item.product.name,
-        brand: item.product.brand,
-        packageLabel: item.product.packageLabel,
-        imageUrl: item.product.imageUrl,
-        priceKobo: item.product.priceKobo,
-        retailPriceKobo: item.product.retailPriceKobo,
-        lineWholesaleKobo: item.product.priceKobo * item.quantity,
-        lineRetailKobo: item.product.retailPriceKobo * item.quantity,
+        name: item.pack.product.name,
+        brand: item.pack.brand,
+        packageLabel: item.pack.packageLabel,
+        imageUrl: item.pack.imageUrl || item.pack.product.imageUrl,
+        priceKobo: item.pack.priceKobo,
+        retailPriceKobo: item.pack.retailPriceKobo,
+        lineWholesaleKobo: item.pack.priceKobo * item.quantity,
+        lineRetailKobo: item.pack.retailPriceKobo * item.quantity,
       }));
   }
 
@@ -654,7 +664,7 @@ export class PackagesService {
     const items = this.mapItems(pkg);
     const pricing = await this.pricing.computePricing(
       items.map((i) => ({
-        productId: i.productId,
+        packId: i.packId,
         quantity: i.quantity,
         priceKobo: i.priceKobo,
         retailPriceKobo: i.retailPriceKobo,

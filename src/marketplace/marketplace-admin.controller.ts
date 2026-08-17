@@ -20,7 +20,12 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { CreateSubcategoryDto } from './dto/create-subcategory.dto';
 import { ListProductsQueryDto } from './dto/list-products-query.dto';
 import { ProductListResponseDto } from './dto/product-list-response.dto';
+import { ProductPackResponseDto } from './dto/product-response.dto';
 import { ProductResponseDto } from './dto/product-response.dto';
+import {
+  CreateProductPackDto,
+  UpdateProductPackDto,
+} from './dto/product-pack.dto';
 import { SubcategoryResponseDto } from './dto/subcategory-response.dto';
 import { UpdateBannerDto } from './dto/update-banner.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -122,6 +127,11 @@ export class MarketplaceAdminController {
     return this.catalogService.listAllProducts(query);
   }
 
+  @Get('products/:id')
+  getProduct(@Param('id') id: string): Promise<ProductResponseDto> {
+    return this.catalogService.getProduct(id);
+  }
+
   @Post('products')
   createProduct(@Body() dto: CreateProductDto): Promise<ProductResponseDto> {
     return this.catalogService.createProduct(dto);
@@ -138,5 +148,26 @@ export class MarketplaceAdminController {
   @Patch('products/:id/deactivate')
   deactivateProduct(@Param('id') id: string): Promise<ProductResponseDto> {
     return this.catalogService.deactivateProduct(id);
+  }
+
+  @Post('products/:id/packs')
+  createPack(
+    @Param('id') id: string,
+    @Body() dto: CreateProductPackDto,
+  ): Promise<ProductPackResponseDto> {
+    return this.catalogService.createPack(id, dto);
+  }
+
+  @Patch('packs/:id')
+  updatePack(
+    @Param('id') id: string,
+    @Body() dto: UpdateProductPackDto,
+  ): Promise<ProductPackResponseDto> {
+    return this.catalogService.updatePack(id, dto);
+  }
+
+  @Patch('packs/:id/deactivate')
+  deactivatePack(@Param('id') id: string): Promise<ProductPackResponseDto> {
+    return this.catalogService.deactivatePack(id);
   }
 }

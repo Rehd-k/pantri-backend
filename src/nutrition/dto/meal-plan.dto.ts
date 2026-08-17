@@ -1,8 +1,6 @@
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
-import {
-  MealItemMatchType,
-  MealPlanStatus,
-} from '../../../generated/prisma/client';
+import { MealItemMatchType, MealPlanStatus } from '../../../generated/prisma/client';
+import { RecipeResponseDto } from './recipe.dto';
 
 export class RejectMealPlanDto {
   @IsOptional()
@@ -38,6 +36,11 @@ export class MealPlanItemResponseDto {
   tags!: string[];
   matchType!: MealItemMatchType;
   quantity!: number;
+  quantityCanonical!: number;
+  measureUnitId!: string | null;
+  measureUnitLabel!: string | null;
+  recipeId!: string | null;
+  recipe!: RecipeResponseDto | null;
   sortOrder!: number;
 }
 
@@ -45,6 +48,7 @@ export class MealPlanDayResponseDto {
   id!: string;
   dayIndex!: number;
   label!: string;
+  planDate!: string | null;
   items!: MealPlanItemResponseDto[];
 }
 
@@ -55,6 +59,9 @@ export class MealPlanSummaryDto {
   employerName!: string;
   status!: MealPlanStatus;
   title!: string;
+  startsOn!: string | null;
+  endsOn!: string | null;
+  activatedAt!: string | null;
   packageId!: string | null;
   failureReason!: string | null;
   adminNote!: string | null;

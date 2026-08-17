@@ -101,6 +101,14 @@ export class HealthProfileResponseDto {
   weightKg!: number;
   lifestyle!: DietaryLifestyle;
   activityLevel!: ActivityLevel;
+  targetEnergyKcal!: number;
+  targetProteinMg!: number;
+  targetCarbsMg!: number;
+  targetFatMg!: number;
+  targetFiberMg!: number;
+  targetSugarMg!: number;
+  targetSodiumMg!: number;
+  targetIronUg!: number;
   allergies!: HealthProfileAllergyDto[];
   goals!: HealthProfileGoalDto[];
   createdAt!: string;

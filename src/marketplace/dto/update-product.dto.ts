@@ -26,31 +26,19 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
+  measureFamilyId?: string;
+
+  @IsOptional()
+  @IsString()
   name?: string;
 
   @IsOptional()
   @IsString()
-  brand?: string;
-
-  @IsOptional()
-  @IsString()
-  packageLabel?: string;
+  slug?: string;
 
   @IsOptional()
   @IsString()
   imageUrl?: string;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  priceKobo?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(0)
-  retailPriceKobo?: number;
 
   @IsOptional()
   @IsString()
@@ -59,6 +47,18 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   origin?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  recipeUnitOverrideMg?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  recipeUnitOverrideMl?: number | null;
 
   @IsOptional()
   @Transform(({ value }) => (value === '' ? null : value))

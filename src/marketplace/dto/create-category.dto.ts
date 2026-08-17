@@ -8,6 +8,10 @@ export class CreateCategoryDto {
   @IsNotEmpty()
   name!: string;
 
+  @IsOptional()
+  @IsString()
+  slug?: string;
+
   @IsString()
   @IsNotEmpty()
   imageUrl!: string;

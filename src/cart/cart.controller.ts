@@ -34,21 +34,21 @@ export class CartController {
     return this.cartService.addItem(user.id, dto);
   }
 
-  @Patch('items/:productId')
+  @Patch('items/:packId')
   updateItem(
     @CurrentUser() user: AuthUserPayload,
-    @Param('productId') productId: string,
+    @Param('packId') packId: string,
     @Body() dto: UpdateCartItemDto,
   ): Promise<CartResponseDto> {
-    return this.cartService.updateItem(user.id, productId, dto);
+    return this.cartService.updateItem(user.id, packId, dto);
   }
 
-  @Delete('items/:productId')
+  @Delete('items/:packId')
   removeItem(
     @CurrentUser() user: AuthUserPayload,
-    @Param('productId') productId: string,
+    @Param('packId') packId: string,
   ): Promise<CartResponseDto> {
-    return this.cartService.removeItem(user.id, productId);
+    return this.cartService.removeItem(user.id, packId);
   }
 
   @Delete()

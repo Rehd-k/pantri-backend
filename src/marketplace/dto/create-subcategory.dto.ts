@@ -11,6 +11,10 @@ export class CreateSubcategoryDto {
   name!: string;
 
   @IsOptional()
+  @IsString()
+  slug?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)

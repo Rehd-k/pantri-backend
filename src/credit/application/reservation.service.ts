@@ -237,36 +237,49 @@ export class ReservationService {
       });
 
       let account = afterPurchase;
+      let remainingReservedKobo = remainingKobo - captureKobo;
+      let capturedFromReservation = captureKobo;
 
-      if (params.deliveryFeeKobo && params.deliveryFeeKobo > 0) {
+      const postFee = async (
+        entryType: LedgerEntryType,
+        amountKobo: number,
+        suffix: string,
+      ): Promise<void> => {
+        if (amountKobo <= 0) {
+          return;
+        }
+        const reservedForFee = Math.min(amountKobo, remainingReservedKobo);
+        remainingReservedKobo -= reservedForFee;
+        capturedFromReservation += reservedForFee;
+
         const result = await this.ledger.post(tx, {
           creditAccountId: reservation.creditAccountId,
-          entryType: LedgerEntryType.DELIVERY_FEE,
-          amountKobo: params.deliveryFeeKobo,
+          entryType,
+          amountKobo,
           referenceType: 'CreditReservation',
           referenceId: reservation.id,
-          idempotencyKey: idKey('delivery-fee'),
+          idempotencyKey: idKey(suffix),
           createdByUserId: params.createdByUserId,
-          apply: (_account, e) => ({ postedFeesKobo: e.amountKobo }),
+          apply: () => ({
+            postedFeesKobo: amountKobo,
+            reservedKobo: -reservedForFee,
+          }),
         });
         account = result.account;
-      }
+      };
 
-      if (params.serviceFeeKobo && params.serviceFeeKobo > 0) {
-        const result = await this.ledger.post(tx, {
-          creditAccountId: reservation.creditAccountId,
-          entryType: LedgerEntryType.SERVICE_FEE,
-          amountKobo: params.serviceFeeKobo,
-          referenceType: 'CreditReservation',
-          referenceId: reservation.id,
-          idempotencyKey: idKey('service-fee'),
-          createdByUserId: params.createdByUserId,
-          apply: (_account, e) => ({ postedFeesKobo: e.amountKobo }),
-        });
-        account = result.account;
-      }
+      await postFee(
+        LedgerEntryType.DELIVERY_FEE,
+        params.deliveryFeeKobo ?? 0,
+        'delivery-fee',
+      );
+      await postFee(
+        LedgerEntryType.SERVICE_FEE,
+        params.serviceFeeKobo ?? 0,
+        'service-fee',
+      );
 
-      const capturedKobo = reservation.capturedKobo + captureKobo;
+      const capturedKobo = reservation.capturedKobo + capturedFromReservation;
       const status = resolveReservationStatus({
         totalKobo: reservation.amountKobo,
         capturedKobo,

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Param,
   Patch,
   Post,
@@ -30,6 +31,28 @@ export class CompaniesAdminController {
   @Get('companies')
   listCompanies(): Promise<CompanyListItemDto[]> {
     return this.companiesService.listCompanies();
+  }
+
+  @Get('companies/:companyId')
+  getCompany(@Param('companyId') companyId: string) {
+    return this.companiesService.getCompanyPortal(companyId);
+  }
+
+  @Get('companies/:companyId/employees')
+  listEmployees(@Param('companyId') companyId: string) {
+    return this.companiesService.listCompanyEmployees(companyId);
+  }
+
+  @Get('employees/:employeeId')
+  getEmployee(@Param('employeeId') employeeId: string) {
+    return this.companiesService.getEmployeePortal(employeeId);
+  }
+
+  @Get('reports/exposure.csv')
+  @Header('Content-Type', 'text/csv')
+  @Header('Content-Disposition', 'attachment; filename="company-exposure.csv"')
+  exposureCsv(): Promise<string> {
+    return this.companiesService.exportExposureCsv();
   }
 
   @Get('companies/:companyId/pickup-points')

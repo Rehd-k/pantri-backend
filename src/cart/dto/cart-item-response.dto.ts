@@ -1,5 +1,6 @@
 export class CartItemResponseDto {
   id!: string;
+  packId!: string;
   productId!: string;
   name!: string;
   brand!: string;

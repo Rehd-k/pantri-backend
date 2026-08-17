@@ -18,7 +18,7 @@ import { PackageVisibility } from '../../../generated/prisma/client';
 export class PackageItemInputDto {
   @IsString()
   @IsNotEmpty()
-  productId!: string;
+  packId!: string;
 
   @Type(() => Number)
   @IsInt()

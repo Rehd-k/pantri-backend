@@ -8,7 +8,9 @@ import {
   CreditAccount,
   CreditPolicy,
   CreditReservationStatus,
+  DeductionStatus,
   Employee,
+  EmployeeVerificationStatus,
   Employer,
   LedgerEntryType,
   OrderCreditStatus,
@@ -28,6 +30,7 @@ import {
 import { simulatePayoffMonths } from '../credit/domain/payoff-simulator';
 import { LedgerPostingService } from '../credit/ledger/ledger-posting.service';
 import { DeliverySettingsService } from '../delivery-settings/delivery-settings.service';
+import { InventoryService } from '../inventory/inventory.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskEngineService } from '../risk/risk-engine.service';
 import { CheckoutDto } from './dto/checkout.dto';
@@ -42,7 +45,12 @@ import { UpdateEmployeeLocationDto } from './dto/update-employee-location.dto';
 
 /** Fully-loaded order shape returned by the employer/logistics lifecycle operations below. */
 export type OrderWithRelations = Prisma.OrderGetPayload<{
-  include: { items: true; pickupPoint: true; reservation: true };
+  include: {
+    items: true;
+    pickupPoint: true;
+    reservation: true;
+    statusHistory: true;
+  };
 }>;
 
 export interface FulfillOrderItemInput {
@@ -54,6 +62,7 @@ const ORDER_RELATIONS_INCLUDE = {
   items: true,
   pickupPoint: true,
   reservation: true,
+  statusHistory: { orderBy: { createdAt: 'asc' as const } },
 } satisfies Prisma.OrderInclude;
 
 const RELEASABLE_RESERVATION_STATUSES: CreditReservationStatus[] = [
@@ -105,6 +114,7 @@ export class OrderService {
     private readonly reservationService: ReservationService,
     private readonly riskEngine: RiskEngineService,
     private readonly ledger: LedgerPostingService,
+    private readonly inventoryService: InventoryService,
   ) {}
 
   async getEmployeeDashboard(userId: string): Promise<EmployeeDashboardDto> {
@@ -221,12 +231,20 @@ export class OrderService {
       include: {
         items: {
           include: {
-            product: {
+            pack: {
               select: {
                 id: true,
-                name: true,
+                brand: true,
+                packageLabel: true,
                 isActive: true,
                 priceKobo: true,
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    isActive: true,
+                  },
+                },
               },
             },
           },
@@ -239,15 +257,18 @@ export class OrderService {
     }
 
     const lineItems = cart.items.map((item) => {
-      if (!item.product.isActive) {
+      if (!item.pack.isActive || !item.pack.product.isActive) {
         throw new BadRequestException(
-          `Product "${item.product.name}" is no longer available`,
+          `Product "${item.pack.product.name}" is no longer available`,
         );
       }
-      const unitPriceKobo = item.product.priceKobo;
+      const unitPriceKobo = item.pack.priceKobo;
       return {
-        productId: item.product.id,
-        name: item.product.name,
+        productId: item.pack.product.id,
+        packId: item.pack.id,
+        name: item.pack.product.name,
+        brand: item.pack.brand,
+        packageLabel: item.pack.packageLabel,
         quantity: item.quantity,
         unitPriceKobo,
         lineTotalKobo: unitPriceKobo * item.quantity,
@@ -267,6 +288,70 @@ export class OrderService {
     const policy = this.resolvePolicy(
       await this.getEmployerPolicy(employer.id),
     );
+
+    const isVerified =
+      employee.verificationStatus === EmployeeVerificationStatus.APPROVED;
+
+    if (!isVerified) {
+      const holdOrder = await this.prisma.order.create({
+        data: {
+          employeeId: employee.id,
+          employerId: employer.id,
+          pickupPointId: pickupPoint.id,
+          subtotalKobo,
+          deliveryFeeKobo,
+          serviceFeeKobo,
+          totalKobo,
+          fulfillmentStatus: OrderFulfillmentStatus.VERIFICATION_HOLD,
+          creditStatus: OrderCreditStatus.NONE,
+          items: {
+            create: lineItems.map((i) => ({
+              productId: i.productId,
+              packId: i.packId,
+              name: i.name,
+              brand: i.brand,
+              packageLabel: i.packageLabel,
+              quantity: i.quantity,
+              unitPriceKobo: i.unitPriceKobo,
+              lineTotalKobo: i.lineTotalKobo,
+            })),
+          },
+          statusHistory: {
+            create: {
+              fromStatus: null,
+              toStatus: OrderFulfillmentStatus.VERIFICATION_HOLD,
+              note: 'Order placed while employee verification is pending',
+              changedById: userId,
+            },
+          },
+        },
+        include: { items: true, pickupPoint: true },
+      });
+
+      await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
+
+      return {
+        id: holdOrder.id,
+        fulfillmentStatus: holdOrder.fulfillmentStatus,
+        creditStatus: holdOrder.creditStatus,
+        subtotalKobo: holdOrder.subtotalKobo,
+        deliveryFeeKobo: holdOrder.deliveryFeeKobo,
+        serviceFeeKobo: holdOrder.serviceFeeKobo,
+        totalKobo: holdOrder.totalKobo,
+        reservedKobo: 0,
+        pickupPointId: holdOrder.pickupPointId,
+        pickupPointLabel: holdOrder.pickupPoint.label,
+        items: holdOrder.items.map((i) => ({
+          productId: i.productId,
+          name: i.name,
+          quantity: i.quantity,
+          unitPriceKobo: i.unitPriceKobo,
+          lineTotalKobo: i.lineTotalKobo,
+        })),
+        createdAt: holdOrder.createdAt.toISOString(),
+      };
+    }
+
     const { needsApproval } = await this.runCreditChecks({
       employee,
       employer,
@@ -289,7 +374,10 @@ export class OrderService {
         items: {
           create: lineItems.map((i) => ({
             productId: i.productId,
+            packId: i.packId,
             name: i.name,
+            brand: i.brand,
+            packageLabel: i.packageLabel,
             quantity: i.quantity,
             unitPriceKobo: i.unitPriceKobo,
             lineTotalKobo: i.lineTotalKobo,
@@ -333,6 +421,18 @@ export class OrderService {
       include: { items: true, pickupPoint: true },
     });
 
+    await this.prisma.orderStatusHistory.create({
+      data: {
+        orderId: order.id,
+        fromStatus: OrderFulfillmentStatus.DRAFT,
+        toStatus: fulfillmentStatus,
+        note: needsApproval
+          ? 'Awaiting employer approval'
+          : 'Auto-approved at checkout',
+        changedById: userId,
+      },
+    });
+
     await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
 
     return {
@@ -358,6 +458,114 @@ export class OrderService {
   }
 
   // ─── Employer/logistics order lifecycle (M5) ────────────────────
+
+  /** Lists orders for the authenticated employee (history + tracking). */
+  async listOrdersForEmployee(userId: string): Promise<OrderWithRelations[]> {
+    const { employee } = await this.requireEmployeeContext(userId);
+    return this.prisma.order.findMany({
+      where: { employeeId: employee.id },
+      include: ORDER_RELATIONS_INCLUDE,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async getOrderForEmployee(
+    userId: string,
+    orderId: string,
+  ): Promise<OrderWithRelations> {
+    const { employee } = await this.requireEmployeeContext(userId);
+    const order = await this.prisma.order.findFirst({
+      where: { id: orderId, employeeId: employee.id },
+      include: ORDER_RELATIONS_INCLUDE,
+    });
+    if (!order) {
+      throw new NotFoundException('Order not found');
+    }
+    return order;
+  }
+
+  /**
+   * Advances fulfillment along the operational pipeline:
+   * PENDING_APPROVAL → APPROVED → PROCESSING (sourcing) →
+   * OUT_FOR_DELIVERY (in transit) → READY_FOR_PICKUP → FULFILLED (delivered).
+   * FULFILLED still goes through fulfillOrder for credit capture.
+   */
+  async transitionFulfillmentStatus(
+    orderId: string,
+    toStatus: OrderFulfillmentStatus,
+    actorUserId: string,
+    note?: string,
+    employerId?: string,
+  ): Promise<OrderWithRelations> {
+    const order = await this.findOrderOrThrow(orderId, employerId);
+    const allowed: Partial<
+      Record<OrderFulfillmentStatus, OrderFulfillmentStatus[]>
+    > = {
+      [OrderFulfillmentStatus.PENDING_APPROVAL]: [
+        OrderFulfillmentStatus.APPROVED,
+        OrderFulfillmentStatus.CANCELLED,
+      ],
+      [OrderFulfillmentStatus.APPROVED]: [
+        OrderFulfillmentStatus.PROCESSING,
+        OrderFulfillmentStatus.CANCELLED,
+      ],
+      [OrderFulfillmentStatus.PROCESSING]: [
+        OrderFulfillmentStatus.OUT_FOR_DELIVERY,
+        OrderFulfillmentStatus.READY_FOR_PICKUP,
+        OrderFulfillmentStatus.CANCELLED,
+      ],
+      [OrderFulfillmentStatus.OUT_FOR_DELIVERY]: [
+        OrderFulfillmentStatus.READY_FOR_PICKUP,
+        OrderFulfillmentStatus.FULFILLED,
+        OrderFulfillmentStatus.CANCELLED,
+      ],
+      [OrderFulfillmentStatus.READY_FOR_PICKUP]: [
+        OrderFulfillmentStatus.FULFILLED,
+        OrderFulfillmentStatus.CANCELLED,
+      ],
+      [OrderFulfillmentStatus.VERIFICATION_HOLD]: [
+        OrderFulfillmentStatus.CANCELLED,
+      ],
+    };
+
+    const next = allowed[order.fulfillmentStatus] ?? [];
+    if (!next.includes(toStatus)) {
+      throw new BadRequestException(
+        `Cannot transition from ${order.fulfillmentStatus} to ${toStatus}`,
+      );
+    }
+
+    if (toStatus === OrderFulfillmentStatus.APPROVED) {
+      return this.approveOrder(orderId, actorUserId, undefined, employerId);
+    }
+    if (toStatus === OrderFulfillmentStatus.CANCELLED) {
+      if (order.fulfillmentStatus === OrderFulfillmentStatus.PENDING_APPROVAL) {
+        return this.rejectOrder(orderId, actorUserId, employerId);
+      }
+      return this.cancelOrder(orderId, actorUserId, employerId);
+    }
+    if (toStatus === OrderFulfillmentStatus.FULFILLED) {
+      return this.fulfillOrder(orderId, actorUserId, undefined, employerId);
+    }
+
+    const updated = await this.prisma.order.update({
+      where: { id: orderId },
+      data: { fulfillmentStatus: toStatus },
+      include: ORDER_RELATIONS_INCLUDE,
+    });
+
+    await this.prisma.orderStatusHistory.create({
+      data: {
+        orderId,
+        fromStatus: order.fulfillmentStatus,
+        toStatus,
+        note: note?.trim() || null,
+        changedById: actorUserId,
+      },
+    });
+
+    return this.findOrderOrThrow(orderId, employerId);
+  }
 
   /** Lists orders for an employer's review queue (or platform-wide for ADMIN when `employerId` is omitted), optionally filtered by status. */
   async listOrders(
@@ -460,6 +668,10 @@ export class OrderService {
    * interest grace period. If `items` omits some line items (partial
    * fulfillment), only their share of the subtotal is captured and any
    * remainder stays reserved for a later fulfillment or cancellation.
+   *
+   * Legacy installment-era orders have no `CreditReservation` row. Those are
+   * opened against the employee's revolving account at fulfill time so the
+   * capture path can post to the ledger without double-collecting the old plan.
    */
   async fulfillOrder(
     orderId: string,
@@ -467,7 +679,7 @@ export class OrderService {
     items?: FulfillOrderItemInput[],
     employerId?: string,
   ): Promise<OrderWithRelations> {
-    const order = await this.findOrderOrThrow(orderId, employerId);
+    let order = await this.findOrderOrThrow(orderId, employerId);
 
     const fulfillableStatuses: OrderFulfillmentStatus[] = [
       OrderFulfillmentStatus.APPROVED,
@@ -478,11 +690,6 @@ export class OrderService {
     if (!fulfillableStatuses.includes(order.fulfillmentStatus)) {
       throw new BadRequestException(
         `Order cannot be fulfilled from status ${order.fulfillmentStatus}`,
-      );
-    }
-    if (!order.reservation) {
-      throw new BadRequestException(
-        'Order has no credit reservation to capture',
       );
     }
 
@@ -524,6 +731,18 @@ export class OrderService {
       await this.getEmployerPolicy(order.employerId),
     );
 
+    order = await this.ensureCapturableReservation(
+      order,
+      actorUserId,
+      policy.reservationTtlHours,
+      employerId,
+    );
+    if (!order.reservation) {
+      throw new BadRequestException(
+        'Order has no credit reservation to capture',
+      );
+    }
+
     const capture = await this.reservationService.capture({
       reservationId: order.reservation.id,
       purchaseKobo,
@@ -546,6 +765,25 @@ export class OrderService {
           }),
         ),
       );
+
+      const qtyById = new Map(
+        itemUpdates.map((u) => [u.id, u.fulfilledQuantity]),
+      );
+      await this.inventoryService.creditFulfilledItems(
+        tx,
+        order.employeeId,
+        order.items.map((item) => ({
+          productId: item.productId,
+          packId: item.packId,
+          fulfilledQuantity: qtyById.get(item.id) ?? item.quantity,
+        })),
+        orderId,
+      );
+
+      await tx.payrollDeductionPlan.updateMany({
+        where: { orderId, status: DeductionStatus.ACTIVE },
+        data: { status: DeductionStatus.SUSPENDED },
+      });
 
       return tx.order.update({
         where: { id: orderId },
@@ -573,6 +811,7 @@ export class OrderService {
 
     const cancellableStatuses: OrderFulfillmentStatus[] = [
       OrderFulfillmentStatus.DRAFT,
+      OrderFulfillmentStatus.VERIFICATION_HOLD,
       OrderFulfillmentStatus.PENDING_APPROVAL,
       OrderFulfillmentStatus.APPROVED,
       OrderFulfillmentStatus.PROCESSING,
@@ -675,6 +914,68 @@ export class OrderService {
         include: ORDER_RELATIONS_INCLUDE,
       });
     });
+  }
+
+  /**
+   * Opens a revolving-credit hold for installment-era orders that were
+   * approved before `CreditReservation` existed, so fulfill can capture.
+   */
+  private async ensureCapturableReservation(
+    order: OrderWithRelations,
+    actorUserId: string | undefined,
+    ttlHours: number,
+    employerId?: string,
+  ): Promise<OrderWithRelations> {
+    if (order.reservation) {
+      return order;
+    }
+
+    let reservation = await this.prisma.creditReservation.findUnique({
+      where: { orderId: order.id },
+    });
+    if (!reservation) {
+      const account = await this.creditAccountService.getOrCreateAccount(
+        order.employeeId,
+      );
+      const amountKobo = order.approvedAmountKobo ?? order.totalKobo;
+      if (amountKobo <= 0) {
+        throw new BadRequestException(
+          'Order has no credit reservation to capture',
+        );
+      }
+
+      try {
+        reservation = await this.reservationService.reserve({
+          creditAccountId: account.id,
+          orderId: order.id,
+          amountKobo,
+          productType: order.productType,
+          ttlHours,
+          createdByUserId: actorUserId,
+          idempotencyKey: `fulfill-backfill:${order.id}`,
+        });
+      } catch (error) {
+        reservation = await this.prisma.creditReservation.findUnique({
+          where: { orderId: order.id },
+        });
+        if (!reservation) {
+          throw error;
+        }
+      }
+    }
+
+    if (!RELEASABLE_RESERVATION_STATUSES.includes(reservation.status)) {
+      throw new BadRequestException(
+        `Order reservation is ${reservation.status} and cannot be captured`,
+      );
+    }
+
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: { creditStatus: OrderCreditStatus.RESERVED },
+    });
+
+    return this.findOrderOrThrow(order.id, employerId);
   }
 
   private async findOrderOrThrow(

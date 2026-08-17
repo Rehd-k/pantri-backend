@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Put,
   UseGuards,
@@ -17,6 +18,7 @@ import { CheckoutDto } from './dto/checkout.dto';
 import { CheckoutResponseDto } from './dto/checkout-response.dto';
 import { EmployeeDashboardDto } from './dto/employee-dashboard.dto';
 import { EmployeeLocationDto } from './dto/employee-location.dto';
+import { OrderResponseDto, toOrderResponseDto } from './dto/order-response.dto';
 import { UpdateEmployeeLocationDto } from './dto/update-employee-location.dto';
 import { OrderService } from './order.service';
 
@@ -31,6 +33,23 @@ export class OrderController {
     @CurrentUser() user: AuthUserPayload,
   ): Promise<EmployeeDashboardDto> {
     return this.orderService.getEmployeeDashboard(user.id);
+  }
+
+  @Get('employees/me/orders')
+  async listMyOrders(
+    @CurrentUser() user: AuthUserPayload,
+  ): Promise<OrderResponseDto[]> {
+    const orders = await this.orderService.listOrdersForEmployee(user.id);
+    return orders.map(toOrderResponseDto);
+  }
+
+  @Get('employees/me/orders/:id')
+  async getMyOrder(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('id') id: string,
+  ): Promise<OrderResponseDto> {
+    const order = await this.orderService.getOrderForEmployee(user.id, id);
+    return toOrderResponseDto(order);
   }
 
   @Get('employees/me/location')

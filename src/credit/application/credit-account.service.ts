@@ -20,7 +20,13 @@ export class CreditAccountService {
   constructor(private readonly prisma: PrismaService) {}
 
   /** Fetches the employee's credit account, creating it (with a freshly computed limit) if absent. */
-  async getOrCreateAccount(employeeId: string): Promise<CreditAccount> {
+  async getOrCreateAccount(
+    employeeId: string,
+    options?: {
+      forceZeroLimit?: boolean;
+      initialStatus?: CreditAccountStatus;
+    },
+  ): Promise<CreditAccount> {
     const existing = await this.prisma.creditAccount.findUnique({
       where: { employeeId },
     });
@@ -37,12 +43,12 @@ export class CreditAccountService {
     }
 
     const multiplierBps =
+      employee.creditMultiplierBps ??
       employee.employer.creditPolicy?.creditMultiplierBps ??
       DEFAULT_CREDIT_MULTIPLIER_BPS;
-    const creditLimitKobo = computeCreditLimitKobo(
-      employee.salaryKobo,
-      multiplierBps,
-    );
+    const creditLimitKobo = options?.forceZeroLimit
+      ? 0
+      : computeCreditLimitKobo(employee.salaryKobo, multiplierBps);
 
     try {
       return await this.prisma.creditAccount.create({
@@ -50,7 +56,7 @@ export class CreditAccountService {
           employeeId,
           creditLimitKobo,
           availableKobo: creditLimitKobo,
-          status: CreditAccountStatus.ACTIVE,
+          status: options?.initialStatus ?? CreditAccountStatus.ACTIVE,
         },
       });
     } catch (error) {
@@ -121,6 +127,7 @@ export class CreditAccountService {
       });
 
       const multiplierBps =
+        employee.creditMultiplierBps ??
         employee.employer.creditPolicy?.creditMultiplierBps ??
         DEFAULT_CREDIT_MULTIPLIER_BPS;
       const creditLimitKobo = computeCreditLimitKobo(

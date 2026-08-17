@@ -28,6 +28,14 @@ export class MealPlanController {
     return this.mealPlanService.listForUser(user.id);
   }
 
+  /** Latest activated plan, or null when still being curated. */
+  @Get('active')
+  getActive(
+    @CurrentUser() user: AuthUserPayload,
+  ): Promise<MealPlanDetailDto | null> {
+    return this.mealPlanService.getActiveForUser(user.id);
+  }
+
   @Get(':id')
   getOne(
     @CurrentUser() user: AuthUserPayload,

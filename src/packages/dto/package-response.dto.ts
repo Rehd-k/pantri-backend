@@ -1,5 +1,6 @@
 export class PackageItemResponseDto {
   id!: string;
+  packId!: string;
   productId!: string;
   quantity!: number;
   sortOrder!: number;

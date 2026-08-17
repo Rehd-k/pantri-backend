@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CreditModule } from '../credit/credit.module';
 import { DeliverySettingsModule } from '../delivery-settings/delivery-settings.module';
 import { IdentityModule } from '../identity/identity.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { RiskModule } from '../risk/risk.module';
 import { OrderOpsController } from './order-ops.controller';
 import { OrderController } from './order.controller';
@@ -15,6 +16,7 @@ import { OrderService } from './order.service';
     CreditModule,
     RiskModule,
     IdentityModule,
+    InventoryModule,
   ],
   controllers: [OrderController, OrderOpsController],
   providers: [OrderService],

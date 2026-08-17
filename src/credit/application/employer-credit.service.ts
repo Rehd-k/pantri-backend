@@ -6,10 +6,12 @@ import {
 import {
   CreditAccountStatus,
   CreditPolicy,
+  EmployeeVerificationStatus,
   OverDurationAction,
   OverLimitAction,
 } from '../../../generated/prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { CreditAccountService } from './credit-account.service';
 
 export interface UpdateCreditPolicyParams {
   defaultDeductionPercent?: number;
@@ -39,7 +41,10 @@ export interface UpdateCreditPolicyParams {
 /** Employer-facing management of the `CreditPolicy` that governs their tenant, and per-employee account controls. */
 @Injectable()
 export class EmployerCreditService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly creditAccounts: CreditAccountService,
+  ) {}
 
   /** Resolves which employer a staff user acts on behalf of (membership first, legacy soft-link fallback). */
   async resolveEmployerId(userId: string): Promise<string> {
@@ -75,10 +80,24 @@ export class EmployerCreditService {
     params: UpdateCreditPolicyParams,
   ): Promise<CreditPolicy> {
     await this.getPolicy(employerId);
-    return this.prisma.creditPolicy.update({
+    const policy = await this.prisma.creditPolicy.update({
       where: { employerId },
       data: { ...params, version: { increment: 1 } },
     });
+
+    const employees = await this.prisma.employee.findMany({
+      where: {
+        employerId,
+        verificationStatus: EmployeeVerificationStatus.APPROVED,
+        creditMultiplierBps: null,
+      },
+      select: { id: true },
+    });
+    for (const employee of employees) {
+      await this.creditAccounts.recalculateLimit(employee.id);
+    }
+
+    return policy;
   }
 
   async listEmployees(employerId: string) {

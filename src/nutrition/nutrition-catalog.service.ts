@@ -18,6 +18,7 @@ import {
   HealthProfileResponseDto,
   UpsertHealthProfileDto,
 } from './dto/health-profile.dto';
+import { computeDailyTargets } from './nutrient-targets';
 
 @Injectable()
 export class NutritionCatalogService {
@@ -253,6 +254,28 @@ export class NutritionCatalogService {
       }
     }
 
+    const catalogGoals =
+      goalIds.length > 0
+        ? await this.prisma.primaryGoal.findMany({
+            where: { id: { in: goalIds } },
+            select: { slug: true },
+          })
+        : [];
+    const goalSlugs = [
+      ...catalogGoals.map((g) => g.slug),
+      ...dto.goals
+        .map((g) => g.customLabel?.trim())
+        .filter((label): label is string => Boolean(label)),
+    ];
+    const targets = computeDailyTargets({
+      age: dto.age,
+      gender: dto.gender,
+      heightCm: dto.heightCm,
+      weightKg: dto.weightKg,
+      activityLevel: dto.activityLevel,
+      goalSlugs,
+    });
+
     const profile = await this.prisma.$transaction(async (tx) => {
       const upserted = await tx.healthProfile.upsert({
         where: { employeeId: employee.id },
@@ -264,6 +287,14 @@ export class NutritionCatalogService {
           weightKg: dto.weightKg,
           lifestyle: dto.lifestyle,
           activityLevel: dto.activityLevel,
+          targetEnergyKcal: targets.energyKcal,
+          targetProteinMg: targets.proteinMg,
+          targetCarbsMg: targets.carbsMg,
+          targetFatMg: targets.fatMg,
+          targetFiberMg: targets.fiberMg,
+          targetSugarMg: targets.sugarMg,
+          targetSodiumMg: targets.sodiumMg,
+          targetIronUg: targets.ironUg,
         },
         update: {
           age: dto.age,
@@ -272,6 +303,14 @@ export class NutritionCatalogService {
           weightKg: dto.weightKg,
           lifestyle: dto.lifestyle,
           activityLevel: dto.activityLevel,
+          targetEnergyKcal: targets.energyKcal,
+          targetProteinMg: targets.proteinMg,
+          targetCarbsMg: targets.carbsMg,
+          targetFatMg: targets.fatMg,
+          targetFiberMg: targets.fiberMg,
+          targetSugarMg: targets.sugarMg,
+          targetSodiumMg: targets.sodiumMg,
+          targetIronUg: targets.ironUg,
         },
       });
 
@@ -410,6 +449,14 @@ export class NutritionCatalogService {
     weightKg: number;
     lifestyle: HealthProfileResponseDto['lifestyle'];
     activityLevel: HealthProfileResponseDto['activityLevel'];
+    targetEnergyKcal: number;
+    targetProteinMg: number;
+    targetCarbsMg: number;
+    targetFatMg: number;
+    targetFiberMg: number;
+    targetSugarMg: number;
+    targetSodiumMg: number;
+    targetIronUg: number;
     createdAt: Date;
     updatedAt: Date;
     allergies: Array<{
@@ -434,6 +481,14 @@ export class NutritionCatalogService {
       weightKg: profile.weightKg,
       lifestyle: profile.lifestyle,
       activityLevel: profile.activityLevel,
+      targetEnergyKcal: profile.targetEnergyKcal,
+      targetProteinMg: profile.targetProteinMg,
+      targetCarbsMg: profile.targetCarbsMg,
+      targetFatMg: profile.targetFatMg,
+      targetFiberMg: profile.targetFiberMg,
+      targetSugarMg: profile.targetSugarMg,
+      targetSodiumMg: profile.targetSodiumMg,
+      targetIronUg: profile.targetIronUg,
       allergies: profile.allergies.map((row) => ({
         id: row.id,
         allergyId: row.allergyId,

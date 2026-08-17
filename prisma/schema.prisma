@@ -19,6 +19,7 @@ enum UserRole {
   EMPLOYEE
   SUPPLIER
   LOGISTICS
+  NUTRITIONIST
 }
 
 enum UserStatus {
@@ -31,6 +32,7 @@ enum PlatformRole {
   SUPER_ADMIN
   FINANCE_OFFICER
   AUDITOR
+  NUTRITIONIST
 }
 
 enum EmployerMembershipRole {
@@ -45,6 +47,40 @@ enum EmployeeAccountStatus {
   ACTIVE
   FROZEN
   CLOSED
+}
+
+enum EmployeeVerificationStatus {
+  INVITED
+  REGISTERED
+  DOCS_SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum EmployeeInviteStatus {
+  PENDING
+  USED
+  REVOKED
+  EXPIRED
+}
+
+enum VerificationDocumentType {
+  EMPLOYMENT_PROOF
+  PAYROLL_PROOF
+  OTHER
+}
+
+enum VerificationDocumentStatus {
+  UPLOADED
+  SUBMITTED
+  REJECTED
+}
+
+enum CompanyInvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  VOID
 }
 
 enum PayrollFrequency {
@@ -119,11 +155,17 @@ enum WriteOffStatus {
 
 enum OrderFulfillmentStatus {
   DRAFT
+  /// Order placed before employee verification; no credit reserved.
+  VERIFICATION_HOLD
   PENDING_APPROVAL
   APPROVED
+  /// Product language: sourcing
   PROCESSING
+  /// Product language: waiting for pickup
   READY_FOR_PICKUP
+  /// Product language: in transit
   OUT_FOR_DELIVERY
+  /// Product language: delivered
   FULFILLED
   CANCELLED
   EXPIRED
@@ -204,6 +246,19 @@ enum PackageKind {
   AI_GENERATED
 }
 
+enum MeasureDimension {
+  MASS
+  VOLUME
+  COUNT
+}
+
+enum MeasureKind {
+  METRIC
+  PANTRA
+  TRADITIONAL
+  COUNT
+}
+
 // ─── Nutrition / meal-plan enums ──────────────────────────────
 
 enum DietaryLifestyle {
@@ -232,6 +287,25 @@ enum MealItemMatchType {
   ALTERNATIVE
 }
 
+enum HouseholdStockLedgerReason {
+  ORDER_FULFILLED
+  MANUAL_ADD
+  MANUAL_ADJUST
+  COOKED
+  RESTOCK_DISCARDED
+}
+
+enum RestockAlertStatus {
+  OPEN
+  DISMISSED
+  ADDED_TO_CART
+}
+
+enum RecipeSource {
+  AI
+  USER
+}
+
 enum PackageVisibility {
   PRIVATE
   UNLISTED
@@ -258,10 +332,12 @@ model Employer {
 
   memberships   EmployerMembership[]
   employees     Employee[]
+  employeeInvites EmployeeInvite[]
   creditPolicy  CreditPolicy?
   pickupPoints  EmployerPickupPoint[]
   orders        Order[]
   payrollRuns   PayrollRun[]
+  invoices      CompanyInvoice[]
   users         User[]
 
   @@map("Employer")
@@ -299,6 +375,11 @@ model User {
   writeOffsRequested     WriteOffRequest[]     @relation("WriteOffRequester")
   writeOffsApproved      WriteOffRequest[]     @relation("WriteOffApprover")
   mealPlansReviewed      MealPlan[]            @relation("MealPlanReviewer")
+  invitesCreated         EmployeeInvite[]      @relation("InviteCreator")
+  verificationDocsUploaded VerificationDocument[] @relation("VerificationUploader")
+  employeesVerified      Employee[]            @relation("EmployeeVerifier")
+  orderStatusChanges     OrderStatusHistory[]  @relation("OrderStatusActor")
+  invoicesGenerated      CompanyInvoice[]      @relation("InvoiceGenerator")
 
   @@index([employerId])
   @@index([role, status])
@@ -320,22 +401,30 @@ model EmployerMembership {
 }
 
 model Employee {
-  id                  String                @id @default(cuid())
-  userId              String                @unique
-  user                User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                  String                     @id @default(cuid())
+  userId              String                     @unique
+  user                User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
   employerId          String
-  employer            Employer              @relation(fields: [employerId], references: [id])
-  salaryKobo          Int
-  deductionPercent    Int                   @default(20)
-  employmentStartedAt DateTime              @default(now())
-  accountStatus       EmployeeAccountStatus @default(ACTIVE)
+  employer            Employer                   @relation(fields: [employerId], references: [id])
+  salaryKobo          Int                        @default(0)
+  /// Per-employee override; null falls back to employer CreditPolicy.creditMultiplierBps.
+  creditMultiplierBps Int?
+  deductionPercent    Int                        @default(20)
+  employmentStartedAt DateTime                   @default(now())
+  accountStatus       EmployeeAccountStatus      @default(ACTIVE)
+  verificationStatus  EmployeeVerificationStatus @default(REGISTERED)
+  verifiedAt          DateTime?
+  verifiedById        String?
+  verifiedBy          User?                      @relation("EmployeeVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+  rejectionReason     String?
+  phone               String?
   addressLine         String?
   city                String?
   state               String?
   latitude            Float?
   longitude           Float?
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
 
   creditAccount       CreditAccount?
   riskProfile         RiskProfile?
@@ -344,10 +433,63 @@ model Employee {
   payrollLines        PayrollDeductionLine[]
   healthProfile       HealthProfile?
   mealPlans           MealPlan[]
+  householdStock      HouseholdStock[]
+  restockAlerts       RestockAlert[]
+  recipes             Recipe[]
+  cookedMeals         CookedMeal[]
+  dailyNutritionLogs  DailyNutritionLog[]
+  invite              EmployeeInvite?
+  verificationDocuments VerificationDocument[]
+  invoiceLines        CompanyInvoiceLine[]
 
   @@index([employerId])
   @@index([employerId, accountStatus])
+  @@index([employerId, verificationStatus])
   @@index([userId, employerId])
+  @@index([verificationStatus, createdAt])
+}
+
+model EmployeeInvite {
+  id           String              @id @default(cuid())
+  employerId   String
+  employer     Employer            @relation(fields: [employerId], references: [id], onDelete: Cascade)
+  code         String              @unique
+  email        String
+  phone        String?
+  status       EmployeeInviteStatus @default(PENDING)
+  expiresAt    DateTime
+  usedAt       DateTime?
+  usedByUserId String?
+  employeeId   String?             @unique
+  employee     Employee?           @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  createdById  String?
+  createdBy    User?               @relation("InviteCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([employerId, status])
+  @@index([email, status])
+  @@index([expiresAt])
+}
+
+model VerificationDocument {
+  id           String                      @id @default(cuid())
+  employeeId   String
+  employee     Employee                    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  type         VerificationDocumentType
+  status       VerificationDocumentStatus  @default(UPLOADED)
+  fileName     String
+  fileUrl      String
+  imageKitFileId String?
+  mimeType     String?
+  uploadedById String
+  uploadedBy   User                        @relation("VerificationUploader", fields: [uploadedById], references: [id])
+  note         String?
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
+
+  @@index([employeeId, type])
+  @@index([employeeId, status])
 }
 
 model SalaryHistory {
@@ -556,6 +698,7 @@ model Order {
   reservation    CreditReservation?
   /// Legacy read-only after revolving credit cutover.
   deductionPlan  PayrollDeductionPlan?
+  statusHistory  OrderStatusHistory[]
 
   @@index([employeeId, employerId])
   @@index([employeeId, fulfillmentStatus, createdAt])
@@ -564,19 +707,38 @@ model Order {
   @@index([creditStatus, fulfillmentStatus])
 }
 
+model OrderStatusHistory {
+  id        String                 @id @default(cuid())
+  orderId   String
+  order     Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  fromStatus OrderFulfillmentStatus?
+  toStatus  OrderFulfillmentStatus
+  note      String?
+  changedById String?
+  changedBy User?                  @relation("OrderStatusActor", fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt DateTime               @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([toStatus, createdAt])
+}
+
 model OrderItem {
-  id               String   @id @default(cuid())
-  orderId          String
-  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId        String
-  name             String
-  quantity         Int
-  fulfilledQuantity Int     @default(0)
-  unitPriceKobo    Int
-  lineTotalKobo    Int
-  createdAt        DateTime @default(now())
+  id                String   @id @default(cuid())
+  orderId           String
+  order             Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId         String
+  packId            String?
+  name              String
+  brand             String   @default("")
+  packageLabel      String   @default("")
+  quantity          Int
+  fulfilledQuantity Int      @default(0)
+  unitPriceKobo     Int
+  lineTotalKobo     Int
+  createdAt         DateTime @default(now())
 
   @@index([orderId])
+  @@index([packId])
 }
 
 /// Legacy per-order installment plan — retained read-only; no new rows after cutover.
@@ -726,11 +888,63 @@ model IdempotencyRecord {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MARKETPLACE (unchanged domain)
+// MEASURES & SCALES
+// ═══════════════════════════════════════════════════════════════
+
+model MeasureFamily {
+  id                    String               @id @default(cuid())
+  slug                  String               @unique
+  name                  String
+  description           String               @default("")
+  dimension             MeasureDimension
+  defaultRecipeUnitId   String?
+  defaultRecipeUnit     MeasureUnit?         @relation("FamilyDefaultRecipe", fields: [defaultRecipeUnitId], references: [id], onDelete: SetNull)
+  defaultPurchaseUnitId String?
+  defaultPurchaseUnit   MeasureUnit?         @relation("FamilyDefaultPurchase", fields: [defaultPurchaseUnitId], references: [id], onDelete: SetNull)
+  sortOrder             Int                  @default(0)
+  isActive              Boolean              @default(true)
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  products              MarketplaceProduct[]
+
+  @@index([isActive, sortOrder])
+}
+
+model MeasureUnit {
+  id             String            @id @default(cuid())
+  slug           String            @unique
+  name           String
+  shortLabel     String
+  kind           MeasureKind
+  dimension      MeasureDimension
+  milligrams     Int?
+  millilitres    Int?
+  piecesPerUnit  Int?
+  isPurchaseUnit Boolean           @default(false)
+  isRecipeUnit   Boolean           @default(false)
+  sortOrder      Int               @default(0)
+  isActive       Boolean           @default(true)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  familiesAsRecipe   MeasureFamily[] @relation("FamilyDefaultRecipe")
+  familiesAsPurchase MeasureFamily[] @relation("FamilyDefaultPurchase")
+  packs              ProductPack[]
+  mealPlanItems      MealPlanItem[]
+  recipeIngredients  RecipeIngredient[]
+
+  @@index([isActive, sortOrder])
+  @@index([dimension, isRecipeUnit])
+  @@index([dimension, isPurchaseUnit])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MARKETPLACE
 // ═══════════════════════════════════════════════════════════════
 
 model MarketplaceCategory {
   id            String                   @id @default(cuid())
+  slug          String                   @unique
   name          String
   imageUrl      String
   accentColor   String
@@ -746,6 +960,7 @@ model MarketplaceCategory {
 
 model MarketplaceSubcategory {
   id         String               @id @default(cuid())
+  slug       String
   categoryId String
   category   MarketplaceCategory  @relation(fields: [categoryId], references: [id])
   name       String
@@ -755,23 +970,25 @@ model MarketplaceSubcategory {
   updatedAt  DateTime             @updatedAt
   products   MarketplaceProduct[]
 
+  @@unique([categoryId, slug])
   @@index([categoryId, isActive, sortOrder])
 }
 
 model MarketplaceProduct {
   id                           String                 @id @default(cuid())
+  slug                         String                 @unique
   categoryId                   String
   category                     MarketplaceCategory    @relation(fields: [categoryId], references: [id])
   subcategoryId                String
   subcategory                  MarketplaceSubcategory @relation(fields: [subcategoryId], references: [id])
+  measureFamilyId              String
+  measureFamily                MeasureFamily          @relation(fields: [measureFamilyId], references: [id])
   name                         String
-  brand                        String
-  packageLabel                 String
   imageUrl                     String
-  priceKobo                    Int
-  retailPriceKobo              Int
   description                  String                 @default("")
   origin                       String                 @default("")
+  recipeUnitOverrideMg         Int?
+  recipeUnitOverrideMl         Int?
   expiresAt                    DateTime?
   isVerified                   Boolean                @default(false)
   bulkAllocationClaimedPercent Int                    @default(0)
@@ -782,15 +999,45 @@ model MarketplaceProduct {
   isActive                     Boolean                @default(true)
   createdAt                    DateTime               @default(now())
   updatedAt                    DateTime               @updatedAt
-  cartItems                    CartItem[]
+  packs                        ProductPack[]
   reviews                      ProductReview[]
   wishlistItems                WishlistItem[]
-  packageItems                 PackageItem[]
   productAllergens             ProductAllergen[]
   mealPlanItems                MealPlanItem[]
+  householdStock               HouseholdStock[]
+  recipeIngredients            RecipeIngredient[]
 
   @@index([categoryId, isActive])
   @@index([subcategoryId, isActive])
+  @@index([measureFamilyId])
+  @@index([isActive, sortOrder])
+}
+
+model ProductPack {
+  id              String             @id @default(cuid())
+  sku             String             @unique
+  productId       String
+  product         MarketplaceProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  packUnitId      String
+  packUnit        MeasureUnit        @relation(fields: [packUnitId], references: [id])
+  brand           String
+  packAmount      Int
+  amountMg        Int?
+  amountMl        Int?
+  amountEach      Int?
+  packageLabel    String
+  imageUrl        String
+  priceKobo       Int
+  retailPriceKobo Int
+  sortOrder       Int                @default(0)
+  isActive        Boolean            @default(true)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  cartItems       CartItem[]
+  packageItems    PackageItem[]
+
+  @@unique([productId, brand, packageLabel])
+  @@index([productId, isActive, sortOrder])
   @@index([isActive, sortOrder])
 }
 
@@ -845,19 +1092,19 @@ model Cart {
 }
 
 model CartItem {
-  id            String             @id @default(cuid())
+  id            String      @id @default(cuid())
   cartId        String
-  cart          Cart               @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  productId     String
-  product       MarketplaceProduct @relation(fields: [productId], references: [id])
-  quantity      Int                @default(1)
+  cart          Cart        @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  packId        String
+  pack          ProductPack @relation(fields: [packId], references: [id])
+  quantity      Int         @default(1)
   unitPriceKobo Int
-  createdAt     DateTime           @default(now())
-  updatedAt     DateTime           @updatedAt
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
-  @@unique([cartId, productId])
+  @@unique([cartId, packId])
   @@index([cartId])
-  @@index([productId])
+  @@index([packId])
 }
 
 model MarketplaceBanner {
@@ -902,18 +1149,19 @@ model PantryPackage {
 }
 
 model PackageItem {
-  id        String             @id @default(cuid())
+  id        String        @id @default(cuid())
   packageId String
-  package   PantryPackage      @relation(fields: [packageId], references: [id], onDelete: Cascade)
-  productId String
-  product   MarketplaceProduct @relation(fields: [productId], references: [id])
-  quantity  Int                @default(1)
-  sortOrder Int                @default(0)
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
+  package   PantryPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  packId    String
+  pack      ProductPack   @relation(fields: [packId], references: [id])
+  quantity  Int           @default(1)
+  sortOrder Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
 
-  @@unique([packageId, productId])
+  @@unique([packageId, packId])
   @@index([packageId, sortOrder])
+  @@index([packId])
 }
 
 model PackageDiscountTier {
@@ -996,6 +1244,14 @@ model HealthProfile {
   weightKg      Int
   lifestyle     DietaryLifestyle @default(EVERYTHING)
   activityLevel ActivityLevel    @default(MODERATE)
+  targetEnergyKcal Int           @default(0)
+  targetProteinMg  Int           @default(0)
+  targetCarbsMg    Int           @default(0)
+  targetFatMg      Int           @default(0)
+  targetFiberMg    Int           @default(0)
+  targetSugarMg    Int           @default(0)
+  targetSodiumMg   Int           @default(0)
+  targetIronUg     Int           @default(0)
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
@@ -1048,6 +1304,8 @@ model MealPlan {
   employee       Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   status         MealPlanStatus @default(GENERATING)
   title          String         @default("Personalized Meal Plan")
+  startsOn       DateTime?      @db.Date
+  endsOn         DateTime?      @db.Date
   promptSnapshot Json           @default("{}")
   rawAiResponse  Json           @default("{}")
   failureReason  String?
@@ -1055,6 +1313,7 @@ model MealPlan {
   reviewedById   String?
   reviewedBy     User?          @relation("MealPlanReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedAt     DateTime?
+  activatedAt    DateTime?
   packageId      String?        @unique
   package        PantryPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
   createdAt      DateTime       @default(now())
@@ -1067,36 +1326,228 @@ model MealPlan {
 }
 
 model MealPlanDay {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   mealPlanId String
-  mealPlan   MealPlan @relation(fields: [mealPlanId], references: [id], onDelete: Cascade)
+  mealPlan   MealPlan  @relation(fields: [mealPlanId], references: [id], onDelete: Cascade)
   dayIndex   Int
-  label      String   @default("")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  label      String    @default("")
+  /// Calendar date for this plan day (timezone-agnostic date).
+  planDate   DateTime? @db.Date
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   items MealPlanItem[]
 
   @@unique([mealPlanId, dayIndex])
   @@index([mealPlanId])
+  @@index([planDate])
 }
 
 model MealPlanItem {
-  id                   String             @id @default(cuid())
+  id                   String              @id @default(cuid())
   mealPlanDayId        String
-  mealPlanDay          MealPlanDay        @relation(fields: [mealPlanDayId], references: [id], onDelete: Cascade)
+  mealPlanDay          MealPlanDay         @relation(fields: [mealPlanDayId], references: [id], onDelete: Cascade)
   mealSlot             String
   title                String
-  rationale            String             @default("")
-  requestedProductName String             @default("")
+  rationale            String              @default("")
+  requestedProductName String              @default("")
   productId            String?
   product              MarketplaceProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  matchType            MealItemMatchType  @default(PRIMARY)
-  quantity             Int                @default(1)
-  sortOrder            Int                @default(0)
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
+  measureUnitId        String?
+  measureUnit          MeasureUnit?        @relation(fields: [measureUnitId], references: [id], onDelete: SetNull)
+  matchType            MealItemMatchType   @default(PRIMARY)
+  quantity             Int                 @default(1)
+  quantityCanonical    Int                 @default(0)
+  recipeId             String?
+  recipe               Recipe?             @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+  sortOrder            Int                 @default(0)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   @@index([mealPlanDayId, sortOrder])
   @@index([productId])
+  @@index([measureUnitId])
+  @@index([recipeId])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HOUSEHOLD STOCK & COOKED NUTRITION
+// ═══════════════════════════════════════════════════════════════
+
+model HouseholdStock {
+  id                        String   @id @default(cuid())
+  employeeId                String
+  employee                  Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  productId                 String
+  product                   MarketplaceProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  quantityCanonical         Int      @default(0)
+  restockThresholdCanonical Int      @default(0)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  ledger HouseholdStockLedger[]
+  alerts RestockAlert[]
+
+  @@unique([employeeId, productId])
+  @@index([employeeId])
+  @@index([productId])
+}
+
+model HouseholdStockLedger {
+  id             String                     @id @default(cuid())
+  stockId        String
+  stock          HouseholdStock             @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  reason         HouseholdStockLedgerReason
+  deltaCanonical Int
+  orderId        String?
+  cookedMealId   String?
+  note           String?
+  createdAt      DateTime                   @default(now())
+
+  @@index([stockId, createdAt])
+  @@index([orderId])
+  @@index([cookedMealId])
+}
+
+model RestockAlert {
+  id         String             @id @default(cuid())
+  employeeId String
+  employee   Employee           @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  stockId    String
+  stock      HouseholdStock     @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  productId  String
+  status     RestockAlertStatus @default(OPEN)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  resolvedAt DateTime?
+
+  @@index([employeeId, status])
+  @@index([stockId, status])
+  @@index([productId])
+}
+
+model Recipe {
+  id           String       @id @default(cuid())
+  employeeId   String
+  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  title        String
+  mealSlot     String
+  instructions String       @default("")
+  rationale    String       @default("")
+  source       RecipeSource @default(AI)
+  goalSnapshot Json         @default("{}")
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  ingredients   RecipeIngredient[]
+  mealPlanItems MealPlanItem[]
+  cookedMeals   CookedMeal[]
+
+  @@index([employeeId, createdAt])
+}
+
+model RecipeIngredient {
+  id                String             @id @default(cuid())
+  recipeId          String
+  recipe            Recipe             @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  productId         String
+  product           MarketplaceProduct @relation(fields: [productId], references: [id], onDelete: Restrict)
+  measureUnitId     String?
+  measureUnit       MeasureUnit?       @relation(fields: [measureUnitId], references: [id], onDelete: SetNull)
+  quantity          Int                @default(1)
+  quantityCanonical Int
+  sortOrder         Int                @default(0)
+  createdAt         DateTime           @default(now())
+
+  @@index([recipeId, sortOrder])
+  @@index([productId])
+  @@index([measureUnitId])
+}
+
+model CookedMeal {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  recipeId   String
+  recipe     Recipe   @relation(fields: [recipeId], references: [id], onDelete: Restrict)
+  cookedAt   DateTime @default(now())
+  energyKcal Int      @default(0)
+  proteinMg  Int      @default(0)
+  carbsMg    Int      @default(0)
+  fatMg      Int      @default(0)
+  fiberMg    Int      @default(0)
+  sugarMg    Int      @default(0)
+  sodiumMg   Int      @default(0)
+  ironUg     Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([employeeId, cookedAt])
+  @@index([recipeId])
+}
+
+model DailyNutritionLog {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  day        DateTime @db.Date
+  energyKcal Int      @default(0)
+  proteinMg  Int      @default(0)
+  carbsMg    Int      @default(0)
+  fatMg      Int      @default(0)
+  fiberMg    Int      @default(0)
+  sugarMg    Int      @default(0)
+  sodiumMg   Int      @default(0)
+  ironUg     Int      @default(0)
+  cookedCount Int     @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([employeeId, day])
+  @@index([employeeId, day])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// COMPANY MONTHLY INVOICES
+// ═══════════════════════════════════════════════════════════════
+
+model CompanyInvoice {
+  id              String               @id @default(cuid())
+  employerId      String
+  employer        Employer             @relation(fields: [employerId], references: [id], onDelete: Cascade)
+  periodStart     DateTime             @db.Date
+  periodEnd       DateTime             @db.Date
+  status          CompanyInvoiceStatus @default(DRAFT)
+  subtotalKobo    Int                  @default(0)
+  feesKobo        Int                  @default(0)
+  interestKobo    Int                  @default(0)
+  totalDueKobo    Int                  @default(0)
+  remittedKobo    Int                  @default(0)
+  generatedById   String?
+  generatedBy     User?                @relation("InvoiceGenerator", fields: [generatedById], references: [id], onDelete: SetNull)
+  issuedAt        DateTime?
+  notes           String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  lines CompanyInvoiceLine[]
+
+  @@unique([employerId, periodStart, periodEnd])
+  @@index([employerId, status])
+  @@index([periodEnd])
+}
+
+model CompanyInvoiceLine {
+  id              String         @id @default(cuid())
+  invoiceId       String
+  invoice         CompanyInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  employeeId      String?
+  employee        Employee?      @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  description     String
+  orderId         String?
+  amountKobo      Int
+  category        String         @default("PURCHASE")
+  createdAt       DateTime       @default(now())
+
+  @@index([invoiceId])
+  @@index([employeeId])
 }

@@ -1,8 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
   CreditAccount,
+  CreditAccountStatus,
   Employee,
   EmployeeAccountStatus,
+  EmployeeVerificationStatus,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreditAccountService } from '../credit/application/credit-account.service';
@@ -12,6 +14,8 @@ export interface CreateEmployeeWithAccountParams {
   employerId: string;
   salaryKobo: number;
   deductionPercent?: number;
+  phone?: string | null;
+  verificationPending?: boolean;
 }
 
 export interface CreateEmployeeWithAccountResult {
@@ -58,6 +62,8 @@ export class EmployeeService {
       employer.creditPolicy?.defaultDeductionPercent ??
       20;
 
+    const verificationPending = params.verificationPending ?? false;
+
     const employee = await this.prisma.$transaction(async (tx) => {
       const created = await tx.employee.create({
         data: {
@@ -65,23 +71,38 @@ export class EmployeeService {
           employerId: params.employerId,
           salaryKobo: params.salaryKobo,
           deductionPercent,
-          accountStatus: EmployeeAccountStatus.ACTIVE,
+          phone: params.phone ?? null,
+          accountStatus: verificationPending
+            ? EmployeeAccountStatus.FROZEN
+            : EmployeeAccountStatus.ACTIVE,
+          verificationStatus: verificationPending
+            ? EmployeeVerificationStatus.REGISTERED
+            : EmployeeVerificationStatus.APPROVED,
+          verifiedAt: verificationPending ? null : new Date(),
         },
       });
 
-      await tx.salaryHistory.create({
-        data: {
-          employeeId: created.id,
-          salaryKobo: params.salaryKobo,
-          reason: 'Initial salary on onboarding',
-        },
-      });
+      if (!verificationPending && params.salaryKobo > 0) {
+        await tx.salaryHistory.create({
+          data: {
+            employeeId: created.id,
+            salaryKobo: params.salaryKobo,
+            reason: 'Initial salary on onboarding',
+          },
+        });
+      }
 
       return created;
     });
 
     const creditAccount = await this.creditAccountService.getOrCreateAccount(
       employee.id,
+      {
+        forceZeroLimit: verificationPending,
+        initialStatus: verificationPending
+          ? CreditAccountStatus.FROZEN
+          : CreditAccountStatus.ACTIVE,
+      },
     );
 
     return { employee, creditAccount };

@@ -5,6 +5,7 @@ export class WishlistStatusDto {
 export class WishlistItemResponseDto {
   id!: string;
   productId!: string;
+  packId!: string | null;
   name!: string;
   brand!: string;
   packageLabel!: string;

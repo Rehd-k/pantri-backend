@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { DiscountTierDto, PackagePricingDto } from './dto/package-response.dto';
 
 export type PricedLine = {
-  productId: string;
+  packId: string;
   quantity: number;
   priceKobo: number;
   retailPriceKobo: number;

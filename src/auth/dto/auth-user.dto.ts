@@ -18,4 +18,8 @@ export class AuthUserDto {
   companyInviteCode!: string | null;
   businessName!: string | null;
   fleetName!: string | null;
+  /** Present for employees — verification gate for credit. */
+  employeeId!: string | null;
+  verificationStatus!: string | null;
+  phone!: string | null;
 }
