@@ -1,6 +1,17 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, UserRole, UserStatus } from '../../generated/prisma/client';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import * as bcrypt from 'bcrypt';
+import {
+  PlatformRole,
+  Prisma,
+  UserRole,
+  UserStatus,
+} from '../../generated/prisma/client';
 import { AuthService } from '../auth/auth.service';
+import { AuthResponseDto } from '../auth/dto/auth-response.dto';
 import { AuthUserDto } from '../auth/dto/auth-user.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -396,5 +407,46 @@ export class AdminService {
     });
 
     return this.authService.toAuthUserDto(user);
+  }
+
+  async loadNutritionistSession(): Promise<AuthResponseDto> {
+    const userId = await this.ensureNutritionistUserId();
+    return this.authService.issueAuthResponseForUserId(userId);
+  }
+
+  private async ensureNutritionistUserId(): Promise<string> {
+    const email = 'nutritionist@pantri.app';
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existing && existing.role !== UserRole.NUTRITIONIST) {
+      throw new ConflictException(
+        'nutritionist@pantri.app is already used by a different role.',
+      );
+    }
+
+    if (existing) {
+      if (existing.status !== UserStatus.ACTIVE) {
+        await this.prisma.user.update({
+          where: { id: existing.id },
+          data: { status: UserStatus.ACTIVE },
+        });
+      }
+      return existing.id;
+    }
+
+    const created = await this.prisma.user.create({
+      data: {
+        email,
+        passwordHash: await bcrypt.hash('Nutrition123!', 12),
+        firstName: 'Ngozi',
+        lastName: 'Adeyemi',
+        role: UserRole.NUTRITIONIST,
+        status: UserStatus.ACTIVE,
+        platformRole: PlatformRole.NUTRITIONIST,
+      },
+    });
+    return created.id;
   }
 }

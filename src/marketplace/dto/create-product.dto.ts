@@ -29,6 +29,10 @@ export class CreateProductDto {
   @IsNotEmpty()
   measureFamilyId!: string;
 
+  @IsOptional()
+  @IsString()
+  recipeUnitId?: string | null;
+
   @IsString()
   @IsNotEmpty()
   name!: string;

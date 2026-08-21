@@ -408,23 +408,28 @@ async function main() {
 
     // Nutritionist account (meal-plan review/activate).
     const nutritionistEmail = 'nutritionist@pantri.app';
-    const existingNutritionist = await prisma.user.findUnique({
+    const nutritionistPasswordHash = await bcrypt.hash('Nutrition123!', 12);
+    await prisma.user.upsert({
       where: { email: nutritionistEmail },
+      create: {
+        email: nutritionistEmail,
+        passwordHash: nutritionistPasswordHash,
+        firstName: 'Ngozi',
+        lastName: 'Adeyemi',
+        role: UserRole.NUTRITIONIST,
+        status: UserStatus.ACTIVE,
+        platformRole: 'NUTRITIONIST',
+      },
+      update: {
+        passwordHash: nutritionistPasswordHash,
+        firstName: 'Ngozi',
+        lastName: 'Adeyemi',
+        role: UserRole.NUTRITIONIST,
+        status: UserStatus.ACTIVE,
+        platformRole: 'NUTRITIONIST',
+      },
     });
-    if (!existingNutritionist) {
-      await prisma.user.create({
-        data: {
-          email: nutritionistEmail,
-          passwordHash: await bcrypt.hash('Nutrition123!', 12),
-          firstName: 'Ngozi',
-          lastName: 'Adeyemi',
-          role: UserRole.NUTRITIONIST,
-          status: UserStatus.ACTIVE,
-          platformRole: 'NUTRITIONIST',
-        },
-      });
-      console.log(`Seeded NUTRITIONIST user: ${nutritionistEmail}`);
-    }
+    console.log(`Seeded NUTRITIONIST user: ${nutritionistEmail}`);
 
     const salaryHistoryCount = await prisma.salaryHistory.count({
       where: { employeeId: employee.id },

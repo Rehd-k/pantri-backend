@@ -57,6 +57,8 @@ export class ProductResponseDto {
   subcategoryName!: string;
   measureFamilyId!: string;
   measureFamily!: MeasureFamilyResponseDto;
+  recipeUnitId!: string | null;
+  recipeUnit!: MeasureUnitResponseDto | null;
   name!: string;
   imageUrl!: string;
   fromPriceKobo!: number;

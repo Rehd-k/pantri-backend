@@ -3,10 +3,12 @@ import {
   Get,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '../../generated/prisma/client';
+import { AuthResponseDto } from '../auth/dto/auth-response.dto';
 import { AuthUserDto } from '../auth/dto/auth-user.dto';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -48,5 +50,10 @@ export class AdminController {
   @Patch('users/:id/suspend')
   suspendUser(@Param('id') id: string): Promise<AuthUserDto> {
     return this.adminService.suspendUser(id);
+  }
+
+  @Post('session/nutritionist')
+  loadNutritionistSession(): Promise<AuthResponseDto> {
+    return this.adminService.loadNutritionistSession();
   }
 }

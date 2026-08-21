@@ -14,9 +14,9 @@ import {
 } from '../../../generated/prisma/client';
 
 export class CreateMeasureUnitDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  slug!: string;
+  slug?: string;
 
   @IsString()
   @IsNotEmpty()

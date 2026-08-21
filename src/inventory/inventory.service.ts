@@ -9,7 +9,7 @@ import {
   Prisma,
   RestockAlertStatus,
 } from '../../generated/prisma/client';
-import { packCanonicalAmount } from '../measure/measure-convert';
+import { packCanonicalAmount, effectiveRecipeUnit } from '../measure/measure-convert';
 import { PrismaService } from '../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import {
@@ -333,6 +333,7 @@ export class InventoryService {
     const product = await this.prisma.marketplaceProduct.findUnique({
       where: { id: productId },
       include: {
+        recipeUnit: true,
         measureFamily: { include: { defaultRecipeUnit: true } },
       },
     });
@@ -341,7 +342,7 @@ export class InventoryService {
     }
     const unit = measureUnitId
       ? await this.prisma.measureUnit.findUnique({ where: { id: measureUnitId } })
-      : product.measureFamily.defaultRecipeUnit;
+      : effectiveRecipeUnit(product);
     if (!unit) {
       throw new BadRequestException('No measure unit available for this product');
     }

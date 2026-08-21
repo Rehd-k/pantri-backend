@@ -275,11 +275,18 @@ enum ActivityLevel {
 }
 
 enum MealPlanStatus {
+  DRAFT
   GENERATING
   PENDING_REVIEW
   APPROVED
   REJECTED
   FAILED
+}
+
+enum MealPlanSource {
+  MANUAL
+  AI
+  HYBRID
 }
 
 enum MealItemMatchType {
@@ -304,6 +311,7 @@ enum RestockAlertStatus {
 enum RecipeSource {
   AI
   USER
+  NUTRITIONIST
 }
 
 enum PackageVisibility {
@@ -375,6 +383,7 @@ model User {
   writeOffsRequested     WriteOffRequest[]     @relation("WriteOffRequester")
   writeOffsApproved      WriteOffRequest[]     @relation("WriteOffApprover")
   mealPlansReviewed      MealPlan[]            @relation("MealPlanReviewer")
+  mealPlansCreated       MealPlan[]            @relation("MealPlanCreator")
   invitesCreated         EmployeeInvite[]      @relation("InviteCreator")
   verificationDocsUploaded VerificationDocument[] @relation("VerificationUploader")
   employeesVerified      Employee[]            @relation("EmployeeVerifier")
@@ -927,8 +936,9 @@ model MeasureUnit {
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
-  familiesAsRecipe   MeasureFamily[] @relation("FamilyDefaultRecipe")
-  familiesAsPurchase MeasureFamily[] @relation("FamilyDefaultPurchase")
+  familiesAsRecipe   MeasureFamily[]      @relation("FamilyDefaultRecipe")
+  familiesAsPurchase MeasureFamily[]      @relation("FamilyDefaultPurchase")
+  productsAsRecipe   MarketplaceProduct[] @relation("ProductRecipeUnit")
   packs              ProductPack[]
   mealPlanItems      MealPlanItem[]
   recipeIngredients  RecipeIngredient[]
@@ -983,6 +993,8 @@ model MarketplaceProduct {
   subcategory                  MarketplaceSubcategory @relation(fields: [subcategoryId], references: [id])
   measureFamilyId              String
   measureFamily                MeasureFamily          @relation(fields: [measureFamilyId], references: [id])
+  recipeUnitId                 String?
+  recipeUnit                   MeasureUnit?           @relation("ProductRecipeUnit", fields: [recipeUnitId], references: [id], onDelete: SetNull)
   name                         String
   imageUrl                     String
   description                  String                 @default("")
@@ -1010,6 +1022,7 @@ model MarketplaceProduct {
   @@index([categoryId, isActive])
   @@index([subcategoryId, isActive])
   @@index([measureFamilyId])
+  @@index([recipeUnitId])
   @@index([isActive, sortOrder])
 }
 
@@ -1303,6 +1316,7 @@ model MealPlan {
   employeeId     String
   employee       Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   status         MealPlanStatus @default(GENERATING)
+  source         MealPlanSource @default(AI)
   title          String         @default("Personalized Meal Plan")
   startsOn       DateTime?      @db.Date
   endsOn         DateTime?      @db.Date
@@ -1310,6 +1324,8 @@ model MealPlan {
   rawAiResponse  Json           @default("{}")
   failureReason  String?
   adminNote      String?
+  createdById    String?
+  createdBy      User?          @relation("MealPlanCreator", fields: [createdById], references: [id], onDelete: SetNull)
   reviewedById   String?
   reviewedBy     User?          @relation("MealPlanReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedAt     DateTime?
@@ -1323,6 +1339,7 @@ model MealPlan {
 
   @@index([employeeId, status])
   @@index([status, createdAt])
+  @@index([createdById])
 }
 
 model MealPlanDay {
@@ -1363,6 +1380,8 @@ model MealPlanItem {
   sortOrder            Int                 @default(0)
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
+
+  cookedMeals CookedMeal[]
 
   @@index([mealPlanDayId, sortOrder])
   @@index([productId])
@@ -1427,17 +1446,18 @@ model RestockAlert {
 }
 
 model Recipe {
-  id           String       @id @default(cuid())
-  employeeId   String
-  employee     Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  title        String
-  mealSlot     String
-  instructions String       @default("")
-  rationale    String       @default("")
-  source       RecipeSource @default(AI)
-  goalSnapshot Json         @default("{}")
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id               String       @id @default(cuid())
+  employeeId       String
+  employee         Employee     @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  title            String
+  mealSlot         String
+  instructions     String       @default("")
+  instructionSteps String[]     @default([])
+  rationale        String       @default("")
+  source           RecipeSource @default(AI)
+  goalSnapshot     Json         @default("{}")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   ingredients   RecipeIngredient[]
   mealPlanItems MealPlanItem[]
@@ -1465,24 +1485,27 @@ model RecipeIngredient {
 }
 
 model CookedMeal {
-  id         String   @id @default(cuid())
-  employeeId String
-  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
-  recipeId   String
-  recipe     Recipe   @relation(fields: [recipeId], references: [id], onDelete: Restrict)
-  cookedAt   DateTime @default(now())
-  energyKcal Int      @default(0)
-  proteinMg  Int      @default(0)
-  carbsMg    Int      @default(0)
-  fatMg      Int      @default(0)
-  fiberMg    Int      @default(0)
-  sugarMg    Int      @default(0)
-  sodiumMg   Int      @default(0)
-  ironUg     Int      @default(0)
-  createdAt  DateTime @default(now())
+  id             String         @id @default(cuid())
+  employeeId     String
+  employee       Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  recipeId       String
+  recipe         Recipe         @relation(fields: [recipeId], references: [id], onDelete: Restrict)
+  mealPlanItemId String?        @unique
+  mealPlanItem   MealPlanItem?  @relation(fields: [mealPlanItemId], references: [id], onDelete: SetNull)
+  cookedAt       DateTime       @default(now())
+  energyKcal     Int            @default(0)
+  proteinMg      Int            @default(0)
+  carbsMg        Int            @default(0)
+  fatMg          Int            @default(0)
+  fiberMg        Int            @default(0)
+  sugarMg        Int            @default(0)
+  sodiumMg       Int            @default(0)
+  ironUg         Int            @default(0)
+  createdAt      DateTime       @default(now())
 
   @@index([employeeId, cookedAt])
   @@index([recipeId])
+  @@index([mealPlanItemId])
 }
 
 model DailyNutritionLog {

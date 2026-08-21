@@ -73,6 +73,7 @@ export class RecipeService {
   async cookForUser(
     userId: string,
     recipeId: string,
+    mealPlanItemId?: string,
   ): Promise<CookMealResponseDto> {
     const employee = await this.requireEmployee(userId);
     const recipe = await this.prisma.recipe.findFirst({
@@ -101,6 +102,7 @@ export class RecipeService {
         data: {
           employeeId: employee.id,
           recipeId: recipe.id,
+          mealPlanItemId: mealPlanItemId ?? null,
           cookedAt,
           ...nutrition,
         },
@@ -166,11 +168,40 @@ export class RecipeService {
 
     return {
       recipe: this.toRecipeDto(recipe, nextStock, employee.id),
+      mealPlanItemId: result.cooked.mealPlanItemId,
       nutrition,
       cookedAt: result.cooked.cookedAt.toISOString(),
       restockAlerts: opened,
       updatedStock: result.updatedStock,
     };
+  }
+
+  async cookItemForUser(
+    userId: string,
+    itemId: string,
+  ): Promise<CookMealResponseDto> {
+    const employee = await this.requireEmployee(userId);
+    const item = await this.prisma.mealPlanItem.findFirst({
+      where: {
+        id: itemId,
+        mealPlanDay: { mealPlan: { employeeId: employee.id } },
+      },
+      select: {
+        id: true,
+        recipeId: true,
+        cookedMeals: { select: { id: true, cookedAt: true }, take: 1 },
+      },
+    });
+    if (!item) {
+      throw new NotFoundException('Meal not found on your plan');
+    }
+    if (!item.recipeId) {
+      throw new NotFoundException('This meal does not have a recipe yet');
+    }
+    if (item.cookedMeals.length > 0) {
+      throw new ConflictException('This meal was already marked as cooked');
+    }
+    return this.cookForUser(userId, item.recipeId, item.id);
   }
 
   async progressForUser(
@@ -344,6 +375,7 @@ export class RecipeService {
       cookability,
       nutrition: this.sumRecipeNutrition(recipe),
       ingredients,
+      instructionSteps: recipe.instructionSteps ?? [],
       createdAt: recipe.createdAt.toISOString(),
       updatedAt: recipe.updatedAt.toISOString(),
     };

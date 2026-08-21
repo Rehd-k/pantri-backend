@@ -14,7 +14,7 @@ import type {
 import { PrismaService } from '../prisma/prisma.service';
 import { slugify } from '../common/slug';
 import { parseNutritionFacts } from '../common/nutrition-facts';
-import { packAmountsFromUnit } from '../measure/measure-convert';
+import { packAmountsFromUnit, effectiveRecipeUnit } from '../measure/measure-convert';
 import { MeasureService } from '../measure/measure.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { CreateSubcategoryDto } from './dto/create-subcategory.dto';
@@ -40,6 +40,7 @@ type PackWithUnit = ProductPack & { packUnit: MeasureUnit };
 type ProductWithRelations = MarketplaceProduct & {
   category: { id: string; name: string };
   subcategory: { id: string; name: string };
+  recipeUnit: MeasureUnit | null;
   measureFamily: MeasureFamily & {
     defaultRecipeUnit: MeasureUnit | null;
     defaultPurchaseUnit: MeasureUnit | null;
@@ -65,6 +66,7 @@ const emptyDistribution = (): RatingDistributionDto => ({
 const productInclude = {
   category: { select: { id: true, name: true } },
   subcategory: { select: { id: true, name: true } },
+  recipeUnit: true,
   measureFamily: {
     include: {
       defaultRecipeUnit: true,
@@ -214,6 +216,11 @@ export class MarketplaceCatalogService {
     if (!family) {
       throw new NotFoundException('Measure family not found');
     }
+    const recipeUnitId = await this.resolveRecipeUnitId(
+      family.dimension,
+      dto.recipeUnitId,
+      family.defaultRecipeUnitId,
+    );
 
     const sortOrder =
       dto.sortOrder ?? (await this.nextProductSortOrder(dto.categoryId));
@@ -226,6 +233,7 @@ export class MarketplaceCatalogService {
           categoryId: dto.categoryId,
           subcategoryId: dto.subcategoryId,
           measureFamilyId: dto.measureFamilyId,
+          recipeUnitId,
           name: dto.name,
           imageUrl: dto.imageUrl,
           description: dto.description?.trim() ?? '',
@@ -270,14 +278,18 @@ export class MarketplaceCatalogService {
     const categoryId = dto.categoryId ?? existing.categoryId;
     const subcategoryId = dto.subcategoryId ?? existing.subcategoryId;
     await this.assertSubcategoryBelongsToCategory(subcategoryId, categoryId);
-    if (dto.measureFamilyId) {
-      const family = await this.prisma.measureFamily.findUnique({
-        where: { id: dto.measureFamilyId },
-      });
-      if (!family) {
-        throw new NotFoundException('Measure family not found');
-      }
+    const familyId = dto.measureFamilyId ?? existing.measureFamilyId;
+    const family = await this.prisma.measureFamily.findUnique({
+      where: { id: familyId },
+    });
+    if (!family) {
+      throw new NotFoundException('Measure family not found');
     }
+    const recipeUnitId = await this.resolveRecipeUnitId(
+      family.dimension,
+      dto.recipeUnitId !== undefined ? dto.recipeUnitId : existing.recipeUnitId,
+      family.defaultRecipeUnitId,
+    );
     const slug =
       dto.slug !== undefined
         ? await this.uniqueProductSlug(dto.slug, existing.id)
@@ -293,6 +305,7 @@ export class MarketplaceCatalogService {
         ...(dto.measureFamilyId !== undefined
           ? { measureFamilyId: dto.measureFamilyId }
           : {}),
+        recipeUnitId,
         ...(dto.name !== undefined ? { name: dto.name } : {}),
         ...(slug !== undefined ? { slug } : {}),
         ...(dto.imageUrl !== undefined ? { imageUrl: dto.imageUrl } : {}),
@@ -456,7 +469,7 @@ export class MarketplaceCatalogService {
     query: ListProductsQueryDto,
     activeOnly: boolean,
   ): Promise<ProductListResponseDto> {
-    const take = query.take ?? (activeOnly ? 40 : 100);
+    const take = Math.min(query.take ?? (activeOnly ? 40 : 24), 100);
     const skip = query.skip ?? 0;
     const where = this.buildProductWhere(query, activeOnly);
 
@@ -464,7 +477,7 @@ export class MarketplaceCatalogService {
       this.prisma.marketplaceProduct.findMany({
         where,
         include: productInclude,
-        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+        orderBy: this.buildProductOrderBy(query),
         skip,
         take,
       }),
@@ -477,6 +490,26 @@ export class MarketplaceCatalogService {
     };
   }
 
+  private buildProductOrderBy(
+    query: ListProductsQueryDto,
+  ): Prisma.MarketplaceProductOrderByWithRelationInput[] {
+    const direction = query.order === 'desc' ? 'desc' : 'asc';
+    switch (query.sort) {
+      case 'name':
+        return [{ name: direction }, { createdAt: 'asc' }];
+      case 'createdAt':
+        return [{ createdAt: direction }];
+      case 'updatedAt':
+        return [{ updatedAt: direction }];
+      case 'sortOrder':
+      default:
+        return [
+          { sortOrder: query.order ? direction : 'asc' },
+          { createdAt: 'asc' },
+        ];
+    }
+  }
+
   private buildProductWhere(
     query: ListProductsQueryDto,
     activeOnly: boolean,
@@ -484,6 +517,11 @@ export class MarketplaceCatalogService {
     const where: Prisma.MarketplaceProductWhereInput = {};
     if (activeOnly) {
       where.isActive = true;
+    } else if (query.isActive !== undefined) {
+      where.isActive = query.isActive;
+    }
+    if (query.isVerified !== undefined) {
+      where.isVerified = query.isVerified;
     }
     if (query.categoryId) {
       where.categoryId = query.categoryId;
@@ -492,17 +530,64 @@ export class MarketplaceCatalogService {
       where.subcategoryId = query.subcategoryId;
     }
 
+    const origin = query.origin?.trim();
+    if (origin) {
+      where.origin = { contains: origin, mode: 'insensitive' };
+    }
+
+    const tag = query.tag?.trim();
+    if (tag) {
+      where.tags = {
+        hasSome: [tag, tag.toLowerCase(), tag.toUpperCase()],
+      };
+    }
+
+    const packSome: Prisma.ProductPackWhereInput = {};
+    if (
+      query.minPriceKobo !== undefined ||
+      query.maxPriceKobo !== undefined
+    ) {
+      packSome.isActive = true;
+      packSome.priceKobo = {
+        ...(query.minPriceKobo !== undefined
+          ? { gte: query.minPriceKobo }
+          : {}),
+        ...(query.maxPriceKobo !== undefined
+          ? { lte: query.maxPriceKobo }
+          : {}),
+      };
+    }
+
+    if (query.hasPacks === false) {
+      where.packs = { none: {} };
+    } else if (
+      query.hasPacks === true ||
+      Object.keys(packSome).length > 0
+    ) {
+      where.packs = {
+        some: Object.keys(packSome).length > 0 ? packSome : {},
+      };
+    }
+
     const q = query.q?.trim();
     if (q) {
       where.OR = [
         { name: { contains: q, mode: 'insensitive' } },
         { slug: { contains: q, mode: 'insensitive' } },
+        { origin: { contains: q, mode: 'insensitive' } },
         { tags: { has: q.toLowerCase() } },
         { tags: { hasSome: [q, q.toLowerCase(), q.toUpperCase()] } },
         {
           packs: {
             some: {
               brand: { contains: q, mode: 'insensitive' },
+            },
+          },
+        },
+        {
+          packs: {
+            some: {
+              sku: { contains: q, mode: 'insensitive' },
             },
           },
         },
@@ -589,6 +674,27 @@ export class MarketplaceCatalogService {
       },
       include: { packUnit: true },
     });
+  }
+
+  private async resolveRecipeUnitId(
+    familyDimension: string,
+    requestedId: string | null | undefined,
+    familyDefaultId: string | null,
+  ): Promise<string | null> {
+    const candidateId = requestedId?.trim() || familyDefaultId;
+    if (!candidateId) return null;
+    const unit = await this.prisma.measureUnit.findUnique({
+      where: { id: candidateId },
+    });
+    if (!unit) {
+      throw new NotFoundException('Recipe unit not found');
+    }
+    if (unit.dimension !== familyDimension) {
+      throw new BadRequestException(
+        'Recipe unit must match the measure family (mass, volume, or count)',
+      );
+    }
+    return unit.id;
   }
 
   private async requireCategory(id: string): Promise<void> {
@@ -866,6 +972,11 @@ export class MarketplaceCatalogService {
       subcategoryName: row.subcategory.name,
       measureFamilyId: row.measureFamilyId,
       measureFamily: this.measureService.toFamilyDto(row.measureFamily),
+      recipeUnitId: row.recipeUnitId,
+      recipeUnit: (() => {
+        const unit = effectiveRecipeUnit(row);
+        return unit ? this.measureService.toUnitDto(unit) : null;
+      })(),
       name: row.name,
       imageUrl: row.imageUrl,
       fromPriceKobo,

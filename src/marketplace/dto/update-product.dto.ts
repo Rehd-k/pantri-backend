@@ -30,6 +30,10 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
+  recipeUnitId?: string | null;
+
+  @IsOptional()
+  @IsString()
   name?: string;
 
   @IsOptional()

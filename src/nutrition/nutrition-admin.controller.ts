@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -23,11 +25,23 @@ import {
   UpdatePrimaryGoalDto,
 } from './dto/catalog.dto';
 import {
+  AiGenerateMealPlanDto,
+  AiSlotSuggestionDto,
+  AiSuggestSlotDto,
   ApproveMealPlanDto,
+  CatalogProductPickDto,
+  CreateMealPlanDraftDto,
+  ListCatalogProductsQueryDto,
   ListMealPlansQueryDto,
+  ListNutritionEmployeesQueryDto,
   MealPlanDetailDto,
   MealPlanSummaryDto,
+  NutritionEmployeeDto,
+  PatchMealPlanItemDto,
   RejectMealPlanDto,
+  UpdateMealPlanDraftDto,
+  UpsertMealPlanItemDto,
+  UpsertMealRecipeDto,
 } from './dto/meal-plan.dto';
 import { SetProductAllergensDto } from './dto/product-allergens.dto';
 import { MealPlanService } from './meal-plan.service';
@@ -117,6 +131,22 @@ export class NutritionAdminController {
     return this.catalogService.setProductAllergens(id, dto.allergyIds);
   }
 
+  @Get('nutrition/employees')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  listNutritionEmployees(
+    @Query() query: ListNutritionEmployeesQueryDto,
+  ): Promise<NutritionEmployeeDto[]> {
+    return this.mealPlanService.listNutritionEmployees(query);
+  }
+
+  @Get('nutrition/catalog-products')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  searchCatalogProducts(
+    @Query() query: ListCatalogProductsQueryDto,
+  ): Promise<CatalogProductPickDto[]> {
+    return this.mealPlanService.searchCatalogProducts(query);
+  }
+
   @Get('meal-plans')
   @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
   listMealPlans(
@@ -125,10 +155,94 @@ export class NutritionAdminController {
     return this.mealPlanService.listAdmin(query.status);
   }
 
+  @Post('meal-plans')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  createMealPlan(
+    @CurrentUser() user: AuthUserPayload,
+    @Body() dto: CreateMealPlanDraftDto,
+  ): Promise<MealPlanDetailDto> {
+    return this.mealPlanService.createDraft(user.id, dto);
+  }
+
   @Get('meal-plans/:id')
   @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
   getMealPlan(@Param('id') id: string): Promise<MealPlanDetailDto> {
     return this.mealPlanService.getAdmin(id);
+  }
+
+  @Patch('meal-plans/:id')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  updateMealPlan(
+    @Param('id') id: string,
+    @Body() dto: UpdateMealPlanDraftDto,
+  ): Promise<MealPlanDetailDto> {
+    return this.mealPlanService.updateDraft(id, dto);
+  }
+
+  @Post('meal-plans/:id/items')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  upsertMealPlanItem(
+    @Param('id') id: string,
+    @Body() dto: UpsertMealPlanItemDto,
+  ): Promise<MealPlanDetailDto> {
+    return this.mealPlanService.upsertItem(id, dto);
+  }
+
+  @Patch('meal-plans/:id/items/:itemId')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  patchMealPlanItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: PatchMealPlanItemDto,
+  ): Promise<MealPlanDetailDto> {
+    return this.mealPlanService.patchItem(id, itemId, dto);
+  }
+
+  @Delete('meal-plans/:id/items/:itemId')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  deleteMealPlanItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+  ): Promise<MealPlanDetailDto> {
+    return this.mealPlanService.deleteItem(id, itemId);
+  }
+
+  @Put('meal-plans/:id/items/:itemId/recipe')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  upsertMealRecipe(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: UpsertMealRecipeDto,
+  ): Promise<MealPlanDetailDto> {
+    return this.mealPlanService.upsertRecipe(id, itemId, dto);
+  }
+
+  @Post('meal-plans/:id/publish')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  publishMealPlan(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('id') id: string,
+    @Body() dto: ApproveMealPlanDto,
+  ): Promise<MealPlanDetailDto> {
+    return this.mealPlanService.publish(id, user.id, dto);
+  }
+
+  @Post('meal-plans/:id/ai/generate')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  generateMealPlanAi(
+    @Param('id') id: string,
+    @Body() dto: AiGenerateMealPlanDto,
+  ): Promise<MealPlanDetailDto> {
+    return this.mealPlanService.generateWithAi(id, dto);
+  }
+
+  @Post('meal-plans/:id/ai/suggest-slot')
+  @Roles(UserRole.ADMIN, UserRole.NUTRITIONIST)
+  suggestMealPlanSlot(
+    @Param('id') id: string,
+    @Body() dto: AiSuggestSlotDto,
+  ): Promise<AiSlotSuggestionDto> {
+    return this.mealPlanService.suggestSlot(id, dto);
   }
 
   @Post('meal-plans/:id/approve')

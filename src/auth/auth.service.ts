@@ -255,6 +255,14 @@ export class AuthService {
     });
   }
 
+  async issueAuthResponseForUserId(userId: string): Promise<AuthResponseDto> {
+    const user = await this.findUserById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    return this.buildAuthResponse(user);
+  }
+
   private async ensureEmailAvailable(email: string): Promise<void> {
     const existing = await this.prisma.user.findUnique({
       where: { email: email.toLowerCase() },

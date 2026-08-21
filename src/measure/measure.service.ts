@@ -52,7 +52,7 @@ export class MeasureService {
 
   async createUnit(dto: CreateMeasureUnitDto): Promise<MeasureUnitResponseDto> {
     this.assertCanonical(dto.dimension, dto);
-    const slug = slugify(dto.slug);
+    const slug = slugify(dto.slug || dto.name);
     const existing = await this.prisma.measureUnit.findUnique({
       where: { slug },
     });

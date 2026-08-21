@@ -26,6 +26,7 @@ export class RecipeResponseDto {
   title!: string;
   mealSlot!: string;
   instructions!: string;
+  instructionSteps!: string[];
   rationale!: string;
   source!: RecipeSource;
   cookability!: RecipeCookability;
@@ -37,6 +38,7 @@ export class RecipeResponseDto {
 
 export class CookMealResponseDto {
   recipe!: RecipeResponseDto;
+  mealPlanItemId!: string | null;
   nutrition!: CanonicalNutritionDto;
   cookedAt!: string;
   restockAlerts!: RestockAlertResponseDto[];

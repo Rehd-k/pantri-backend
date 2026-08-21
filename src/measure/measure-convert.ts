@@ -1,3 +1,10 @@
+export function effectiveRecipeUnit<T>(product: {
+  recipeUnit?: T | null;
+  measureFamily?: { defaultRecipeUnit?: T | null } | null;
+}): T | null {
+  return product.recipeUnit ?? product.measureFamily?.defaultRecipeUnit ?? null;
+}
+
 export type MeasureCanonicalUnit = {
   milligrams: number | null;
   millilitres: number | null;
