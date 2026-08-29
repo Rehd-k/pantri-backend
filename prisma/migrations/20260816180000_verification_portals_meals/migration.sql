@@ -30,6 +30,9 @@ ADD COLUMN     "verifiedById" TEXT,
 ADD COLUMN     "rejectionReason" TEXT,
 ADD COLUMN     "phone" TEXT;
 
+-- Existing employees stay APPROVED (column default above). New rows start as REGISTERED.
+ALTER TABLE "Employee" ALTER COLUMN "verificationStatus" SET DEFAULT 'REGISTERED';
+
 ALTER TABLE "Employee" ALTER COLUMN "salaryKobo" SET DEFAULT 0;
 
 -- AlterTable MealPlan
