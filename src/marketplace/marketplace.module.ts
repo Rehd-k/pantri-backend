@@ -3,13 +3,18 @@ import { AuthModule } from '../auth/auth.module';
 import { MeasureModule } from '../measure/measure.module';
 import { MarketplaceAdminController } from './marketplace-admin.controller';
 import { MarketplaceCatalogService } from './marketplace-catalog.service';
+import { MarketplacePublicController } from './marketplace-public.controller';
 import { MarketplaceController } from './marketplace.controller';
 import { MarketplaceReviewsService } from './marketplace-reviews.service';
 import { MarketplaceService } from './marketplace.service';
 
 @Module({
   imports: [AuthModule, MeasureModule],
-  controllers: [MarketplaceController, MarketplaceAdminController],
+  controllers: [
+    MarketplaceController,
+    MarketplacePublicController,
+    MarketplaceAdminController,
+  ],
   providers: [
     MarketplaceService,
     MarketplaceCatalogService,

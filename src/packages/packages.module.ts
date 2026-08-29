@@ -4,12 +4,17 @@ import { CartModule } from '../cart/cart.module';
 import { MediaModule } from '../media/media.module';
 import { PackagePricingService } from './package-pricing.service';
 import { PackagesAdminController } from './packages-admin.controller';
+import { PackagesPublicController } from './packages-public.controller';
 import { PackagesController } from './packages.controller';
 import { PackagesService } from './packages.service';
 
 @Module({
   imports: [AuthModule, CartModule, MediaModule],
-  controllers: [PackagesController, PackagesAdminController],
+  controllers: [
+    PackagesController,
+    PackagesPublicController,
+    PackagesAdminController,
+  ],
   providers: [PackagesService, PackagePricingService],
   exports: [PackagesService, PackagePricingService],
 })
