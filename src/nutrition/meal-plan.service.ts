@@ -336,6 +336,8 @@ export class MealPlanService {
               weightKg: profile.weightKg,
               lifestyle: profile.lifestyle,
               activityLevel: profile.activityLevel,
+              householdSize: profile.householdSize,
+              hasChildren: profile.hasChildren,
               allergies: profile.allergies.map(
                 (a) => a.allergy?.name ?? a.customLabel ?? 'Custom',
               ),
@@ -1178,6 +1180,8 @@ export class MealPlanService {
       weightKg: number;
       lifestyle: string;
       activityLevel: string;
+      householdSize: number;
+      hasChildren: boolean;
       allergies: Array<{
         allergyId: string | null;
         allergy: { name: string } | null;
@@ -1230,6 +1234,7 @@ export class MealPlanService {
       (product) =>
         !product.productAllergens.some((pa) => allergyIds.has(pa.allergyId)),
     );
+    const householdSize = Math.min(8, Math.max(1, profile.householdSize || 1));
     const promptSnapshot = {
       age: profile.age,
       gender: profile.gender,
@@ -1240,6 +1245,9 @@ export class MealPlanService {
       allergies,
       goals,
       productCount: safeProducts.length,
+      householdSize,
+      hasChildren: householdSize > 1 && Boolean(profile.hasChildren),
+      servings: householdSize,
     };
     return {
       promptSnapshot,
@@ -1445,6 +1453,8 @@ export class MealPlanService {
             weightKg: profile.weightKg,
             lifestyle: profile.lifestyle,
             activityLevel: profile.activityLevel,
+            householdSize: profile.householdSize,
+            hasChildren: profile.hasChildren,
             allergies: profile.allergies.map(
               (a) => a.allergy?.name ?? a.customLabel ?? 'Custom',
             ),

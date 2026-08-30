@@ -26,6 +26,9 @@ export type AiPlanProfile = {
   allergies: string[];
   goals: string[];
   productCount: number;
+  householdSize: number;
+  hasChildren: boolean;
+  servings: number;
 };
 
 export type AiGeneratedIngredient = {
@@ -176,19 +179,29 @@ export class AiMealPlanService {
     return pick === 'anthropic' ? ['anthropic', 'openai'] : ['openai', 'anthropic'];
   }
 
-  private systemPrompt(dayCount: number): string {
+  private systemPrompt(dayCount: number, profile: AiPlanProfile): string {
+    const servings = Math.min(8, Math.max(1, profile.servings || profile.householdSize || 1));
+    const mixed =
+      profile.lifestyle.trim().toUpperCase() === 'MIXED'
+        ? '- Lifestyle is MIXED: cook meals the whole table can share. Do not default to keto-only or vegan-only dishes.\n'
+        : '';
+    const kids = profile.hasChildren
+      ? '- There are children in the house: include some milder, kid-friendly options.\n'
+      : '';
     return `You are Pantri's home-cook nutrition planner for Nigerian households.
 Recipes MUST use ingredients from the provided catalog. Prefer pantry items when marked inPantry=true.
 Return ONLY valid JSON matching this shape:
 ${PLAN_JSON_SHAPE}
 Rules:
 - quantity is the number of recipe units (cups, spoons, pieces) of that catalog product.
+- Scale ingredient quantities to feed ${servings} ${servings === 1 ? 'person' : 'people'} (householdSize=${servings}).
 - Prefer productId values marked inPantry=true. Do not invent productId values.
 - Create a ${dayCount}-day plan with breakfast, lunch, and dinner each day. Snack is optional.
-- Each meal should have 2-4 ingredients sized to help the user hit their nutrition goals.
+- Each meal should have 2-4 ingredients sized to help the cook hit THEIR personal nutrition goals.
+- Personal goals (weight loss, gut health, muscle, energy) belong to the cook only — never assume every household member shares those goals.
 - instructionSteps must be a numbered-ready array of 3-8 short cooking steps.
 - Never tell the user to buy a grocery package. If an ingredient is missing from pantry, still list it so the app can prompt a restock.
-- Respect allergies, dietary lifestyle, activity level, and goals.`;
+- Respect household allergies and dietary lifestyle. ${mixed}${kids}- Respect the cook's activity level and personal goals.`;
   }
 
   private catalogPayload(products: AiCatalogProduct[]) {
@@ -219,7 +232,7 @@ Rules:
       temperature: 0.4,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: this.systemPrompt(dayCount) },
+        { role: 'system', content: this.systemPrompt(dayCount, input.profile) },
         {
           role: 'user',
           content: JSON.stringify({
@@ -253,7 +266,7 @@ Rules:
         'claude-sonnet-4-20250514',
       max_tokens: 8000,
       temperature: 0.4,
-      system: this.systemPrompt(dayCount),
+      system: this.systemPrompt(dayCount, input.profile),
       messages: [
         {
           role: 'user',
@@ -334,6 +347,7 @@ Rules:
   ): AiGeneratedPlan {
     const pantry = products.filter((p) => p.inPantry);
     const pool = pantry.length > 0 ? pantry : products;
+    const servings = Math.min(8, Math.max(1, profile.servings || profile.householdSize || 1));
     const days: AiGeneratedDay[] = [];
     const slots = ['breakfast', 'lunch', 'dinner'] as const;
 
@@ -342,9 +356,9 @@ Rules:
         const first = pool[(dayIndex + slotIndex) % pool.length] ?? null;
         const second = pool[(dayIndex + slotIndex + 1) % pool.length] ?? null;
         const ingredients: AiGeneratedIngredient[] = [];
-        if (first) ingredients.push({ productId: first.id, quantity: 1 });
+        if (first) ingredients.push({ productId: first.id, quantity: servings });
         if (second && second.id !== first?.id) {
-          ingredients.push({ productId: second.id, quantity: 1 });
+          ingredients.push({ productId: second.id, quantity: servings });
         }
         const instructionSteps = [
           `Measure the listed ${mealSlot} ingredients.`,

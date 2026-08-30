@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { Observable, tap } from 'rxjs';
+import { exceptionMessage } from '../filters/http-exception.filter';
 
 const ANSI = {
   reset: '\x1b[0m',
@@ -82,6 +83,7 @@ export class LoggingInterceptor implements NestInterceptor {
             ip,
             userAgent,
             userLabel,
+            errorMessage: exceptionMessage(err),
           });
         },
       }),
@@ -96,6 +98,7 @@ export class LoggingInterceptor implements NestInterceptor {
     ip: string;
     userAgent: string;
     userLabel: string;
+    errorMessage?: string;
   }): void {
     const methodColor = METHOD_COLOR[info.method] ?? ANSI.white;
     const statusColor = this.statusColor(info.statusCode);
@@ -111,8 +114,18 @@ export class LoggingInterceptor implements NestInterceptor {
     const duration = `${durationColor}${String(info.durationMs).padStart(4)}ms${ANSI.reset}`;
     const url = `${ANSI.white}${info.url}${ANSI.reset}`;
     const meta = `${ANSI.dim}${info.ip} · ${info.userLabel} · ${this.shortUa(info.userAgent)}${ANSI.reset}`;
-
-    this.logger.log(`${method} ${status} ${duration}  ${url}  ${meta}`);
+    const failure =
+      info.errorMessage && info.statusCode >= 400
+        ? `  ${ANSI.red}${info.errorMessage}${ANSI.reset}`
+        : '';
+    const line = `${method} ${status} ${duration}  ${url}  ${meta}${failure}`;
+    if (info.statusCode >= 500) {
+      this.logger.error(line);
+    } else if (info.statusCode >= 400) {
+      this.logger.warn(line);
+    } else {
+      this.logger.log(line);
+    }
   }
 
   private statusColor(status: number): string {

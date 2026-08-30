@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -65,6 +66,15 @@ export class UpsertHealthProfileDto {
   @IsEnum(ActivityLevel)
   activityLevel!: ActivityLevel;
 
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(8)
+  householdSize!: number;
+
+  @IsBoolean()
+  hasChildren!: boolean;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => AllergySelectionDto)
@@ -101,6 +111,8 @@ export class HealthProfileResponseDto {
   weightKg!: number;
   lifestyle!: DietaryLifestyle;
   activityLevel!: ActivityLevel;
+  householdSize!: number;
+  hasChildren!: boolean;
   targetEnergyKcal!: number;
   targetProteinMg!: number;
   targetCarbsMg!: number;

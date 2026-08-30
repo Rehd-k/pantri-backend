@@ -276,6 +276,13 @@ export class NutritionCatalogService {
       goalSlugs,
     });
 
+    const householdSize = Math.min(8, Math.max(1, dto.householdSize));
+    const hasChildren = householdSize > 1 && dto.hasChildren;
+    const lifestyle =
+      householdSize <= 1 && dto.lifestyle === 'MIXED'
+        ? 'EVERYTHING'
+        : dto.lifestyle;
+
     const profile = await this.prisma.$transaction(async (tx) => {
       const upserted = await tx.healthProfile.upsert({
         where: { employeeId: employee.id },
@@ -285,8 +292,10 @@ export class NutritionCatalogService {
           gender: dto.gender.trim(),
           heightCm: dto.heightCm,
           weightKg: dto.weightKg,
-          lifestyle: dto.lifestyle,
+          lifestyle,
           activityLevel: dto.activityLevel,
+          householdSize,
+          hasChildren,
           targetEnergyKcal: targets.energyKcal,
           targetProteinMg: targets.proteinMg,
           targetCarbsMg: targets.carbsMg,
@@ -301,8 +310,10 @@ export class NutritionCatalogService {
           gender: dto.gender.trim(),
           heightCm: dto.heightCm,
           weightKg: dto.weightKg,
-          lifestyle: dto.lifestyle,
+          lifestyle,
           activityLevel: dto.activityLevel,
+          householdSize,
+          hasChildren,
           targetEnergyKcal: targets.energyKcal,
           targetProteinMg: targets.proteinMg,
           targetCarbsMg: targets.carbsMg,
@@ -449,6 +460,8 @@ export class NutritionCatalogService {
     weightKg: number;
     lifestyle: HealthProfileResponseDto['lifestyle'];
     activityLevel: HealthProfileResponseDto['activityLevel'];
+    householdSize: number;
+    hasChildren: boolean;
     targetEnergyKcal: number;
     targetProteinMg: number;
     targetCarbsMg: number;
@@ -481,6 +494,8 @@ export class NutritionCatalogService {
       weightKg: profile.weightKg,
       lifestyle: profile.lifestyle,
       activityLevel: profile.activityLevel,
+      householdSize: profile.householdSize,
+      hasChildren: profile.hasChildren,
       targetEnergyKcal: profile.targetEnergyKcal,
       targetProteinMg: profile.targetProteinMg,
       targetCarbsMg: profile.targetCarbsMg,

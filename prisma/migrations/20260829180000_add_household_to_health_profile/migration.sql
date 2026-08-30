@@ -1,0 +1,6 @@
+-- AlterEnum
+ALTER TYPE "DietaryLifestyle" ADD VALUE IF NOT EXISTS 'MIXED';
+
+-- AlterTable
+ALTER TABLE "HealthProfile" ADD COLUMN IF NOT EXISTS "householdSize" INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE "HealthProfile" ADD COLUMN IF NOT EXISTS "hasChildren" BOOLEAN NOT NULL DEFAULT false;

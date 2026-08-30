@@ -332,6 +332,8 @@ export class MealPlanDetailDto extends MealPlanSummaryDto {
     targetProteinMg: number;
     targetCarbsMg: number;
     targetFatMg: number;
+    householdSize: number;
+    hasChildren: boolean;
   } | null;
 }
 
@@ -348,6 +350,8 @@ export class NutritionEmployeeProfileDto {
   targetProteinMg!: number;
   targetCarbsMg!: number;
   targetFatMg!: number;
+  householdSize!: number;
+  hasChildren!: boolean;
 }
 
 export class NutritionEmployeeDto {

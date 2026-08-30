@@ -266,6 +266,7 @@ enum DietaryLifestyle {
   VEGAN
   VEGETARIAN
   KETO
+  MIXED
 }
 
 enum ActivityLevel {
@@ -1257,6 +1258,8 @@ model HealthProfile {
   weightKg      Int
   lifestyle     DietaryLifestyle @default(EVERYTHING)
   activityLevel ActivityLevel    @default(MODERATE)
+  householdSize Int              @default(1)
+  hasChildren   Boolean          @default(false)
   targetEnergyKcal Int           @default(0)
   targetProteinMg  Int           @default(0)
   targetCarbsMg    Int           @default(0)
