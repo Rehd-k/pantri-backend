@@ -198,7 +198,7 @@ Rules:
 - Prefer productId values marked inPantry=true. Do not invent productId values.
 - Create a ${dayCount}-day plan with breakfast, lunch, and dinner each day. Snack is optional.
 - Each meal should have 2-4 ingredients sized to help the cook hit THEIR personal nutrition goals.
-- Personal goals (weight loss, gut health, muscle, energy) belong to the cook only — never assume every household member shares those goals.
+- Personal goals (weight loss, gut health, muscle, energy) belong to the cook only  never assume every household member shares those goals.
 - instructionSteps must be a numbered-ready array of 3-8 short cooking steps.
 - Never tell the user to buy a grocery package. If an ingredient is missing from pantry, still list it so the app can prompt a restock.
 - Respect household allergies and dietary lifestyle. ${mixed}${kids}- Respect the cook's activity level and personal goals.`;

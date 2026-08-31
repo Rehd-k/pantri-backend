@@ -93,7 +93,7 @@ export class InterestService {
       });
 
       // No purchase yet: nothing has started accruing, so the account is
-      // (trivially) still within grace — record a zero accrual for the day
+      // (trivially) still within grace  record a zero accrual for the day
       // so `accrueDaily` remains idempotent per calendar day.
       const graceEndsAt = firstDraw
         ? addDays(startOfUtcDay(firstDraw.createdAt), graceDays)

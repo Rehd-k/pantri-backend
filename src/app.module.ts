@@ -23,6 +23,7 @@ import { RiskModule } from './risk/risk.module';
 import { VerificationModule } from './verification/verification.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 import { AiModule } from './ai/ai.module';
+import { BlogModule } from './blog/blog.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { AiModule } from './ai/ai.module';
     AiModule,
     NutritionModule,
     InventoryModule,
+    BlogModule,
   ],
 })
 export class AppModule {}

@@ -10,7 +10,7 @@ export const DAIRY: SeedProductDef[] = [
     { each: 30, label: '1 crate' },
   ], PRODUCT_IMAGES.dairy),
   liquid('peak-milk', 'Peak Evaporated Milk', 'eggs-dairy', 'milk', 'Lagos, Nigeria', 2200, 'Peak', ['milk', 'evaporated'], 'Full cream evaporated milk.', [0.16, 0.41], PRODUCT_IMAGES.dairy),
-  liquid('cowbell-milk', 'Cowbell Milk', 'eggs-dairy', 'milk', 'Lagos, Nigeria', 1800, 'Cowbell', ['milk', 'powdered'], 'Instant filled milk drink — liquid pack sizes.', [0.5, 1], PRODUCT_IMAGES.dairy),
+  liquid('cowbell-milk', 'Cowbell Milk', 'eggs-dairy', 'milk', 'Lagos, Nigeria', 1800, 'Cowbell', ['milk', 'powdered'], 'Instant filled milk drink  liquid pack sizes.', [0.5, 1], PRODUCT_IMAGES.dairy),
   dry('peak-powder', 'Peak Powdered Milk', 'eggs-dairy', 'milk', 'Lagos, Nigeria', 8500, 'Peak', ['milk', 'powder'], 'Full cream milk powder.', PRODUCT_IMAGES.dairy, [1, 2, 5]),
   liquid('yoghurt-plain', 'Plain Yoghurt', 'eggs-dairy', 'yoghurt', 'Lagos, Nigeria', 1600, 'Fan Milk', ['yoghurt'], 'Plain unsweetened yoghurt.', [0.5, 1], PRODUCT_IMAGES.dairy),
   protein('cheese-wara', 'Wara Cheese', 'eggs-dairy', 'cheese', 'Kwara, Nigeria', 4000, 'Ilorin Foods', ['cheese', 'wara'], 'Fresh West African wara cheese.', [1, 2], PRODUCT_IMAGES.dairy),

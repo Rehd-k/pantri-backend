@@ -15,6 +15,7 @@ import {
 } from '../generated/prisma/client';
 import { seedMeasures } from './seed/measure-catalog';
 import { seedCategories, seedProducts } from './seed/upsert-catalog';
+import { seedBlogPosts } from './seed/blog-posts';
 
 function nairaToKobo(naira: number): number {
   return Math.round(naira * 100);
@@ -107,6 +108,7 @@ async function main() {
   await seedMeasures(prisma);
   await seedCategories(prisma);
   await seedProducts(prisma);
+  await seedBlogPosts(prisma);
 
   const bannerCount = await prisma.marketplaceBanner.count();
   if (bannerCount === 0) {
@@ -201,7 +203,7 @@ async function main() {
       {
         name: 'Bachelor Package',
         description:
-          'Essentials for one — rice, oil basics, and everyday staples.',
+          'Essentials for one  rice, oil basics, and everyday staples.',
         isPopular: false,
         sortOrder: 0,
         slug: 'bachelor-package',

@@ -7,7 +7,7 @@ import {
 } from '../../generated/prisma/client';
 
 /**
- * M11 — one-time (idempotent) migration from the legacy per-order
+ * M11  one-time (idempotent) migration from the legacy per-order
  * `PayrollDeductionPlan`/`PayrollDeductionInstallment` installment model to
  * the revolving `CreditAccount` ledger.
  *

@@ -2,7 +2,7 @@ import { CreditAccountBalances } from './types';
 
 /**
  * Pure money math for the revolving credit engine. All amounts are integer
- * kobo (1/100 Naira). Nothing here touches the database — keep it that way
+ * kobo (1/100 Naira). Nothing here touches the database  keep it that way
  * so the rules can be unit tested in isolation.
  */
 

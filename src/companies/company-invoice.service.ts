@@ -130,7 +130,7 @@ export class CompanyInvoiceService {
             ...orders.map((order) => ({
               employeeId: order.employeeId,
               orderId: order.id,
-              description: `Fulfilled order ${order.id} — ${order.employee.user.firstName} ${order.employee.user.lastName}`,
+              description: `Fulfilled order ${order.id}  ${order.employee.user.firstName} ${order.employee.user.lastName}`,
               amountKobo: order.totalKobo,
               category: 'PURCHASE',
             })),
@@ -140,7 +140,7 @@ export class CompanyInvoiceService {
                 employeeId: employee.id,
                 orderId:
                   entry.referenceType === 'Order' ? entry.referenceId : null,
-                description: `${entry.entryType.replaceAll('_', ' ')} — ${employee.user.firstName} ${employee.user.lastName}`,
+                description: `${entry.entryType.replaceAll('_', ' ')}  ${employee.user.firstName} ${employee.user.lastName}`,
                 amountKobo: entry.amountKobo,
                 category:
                   entry.entryType === LedgerEntryType.INTEREST

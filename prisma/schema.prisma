@@ -1,4 +1,4 @@
-// Pantri — payroll-backed revolving credit platform
+// Pantri  payroll-backed revolving credit platform
 // Money: integer kobo only. Ledger is source of truth.
 
 generator client {
@@ -326,6 +326,25 @@ enum PackageSubscriptionStatus {
   CANCELLED
 }
 
+enum BlogPostCategory {
+  FOOD
+  NUTRITION
+  RECIPES
+  FAMILY
+  BUDGETING
+  HEALTHY_LIVING
+  FOOD_PRICES
+  COOKING
+  EVENTS
+  VIDEOS
+}
+
+enum BlogPostStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
 // ═══════════════════════════════════════════════════════════════
 // IDENTITY & TENANCY
 // ═══════════════════════════════════════════════════════════════
@@ -390,6 +409,7 @@ model User {
   employeesVerified      Employee[]            @relation("EmployeeVerifier")
   orderStatusChanges     OrderStatusHistory[]  @relation("OrderStatusActor")
   invoicesGenerated      CompanyInvoice[]      @relation("InvoiceGenerator")
+  blogPostsAuthored      BlogPost[]            @relation("BlogPostAuthor")
 
   @@index([employerId])
   @@index([role, status])
@@ -751,7 +771,7 @@ model OrderItem {
   @@index([packId])
 }
 
-/// Legacy per-order installment plan — retained read-only; no new rows after cutover.
+/// Legacy per-order installment plan  retained read-only; no new rows after cutover.
 model PayrollDeductionPlan {
   id            String                        @id @default(cuid())
   orderId       String                        @unique
@@ -1576,4 +1596,32 @@ model CompanyInvoiceLine {
 
   @@index([invoiceId])
   @@index([employeeId])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BLOG / JOURNAL
+// ═══════════════════════════════════════════════════════════════
+
+model BlogPost {
+  id              String           @id @default(cuid())
+  slug            String           @unique
+  title           String
+  excerpt         String
+  category        BlogPostCategory
+  bodyParagraphs  Json
+  coverGradient   String
+  coverImageUrl   String?
+  youtubeUrl      String?
+  tiktokUrl       String?
+  readTimeMinutes Int              @default(1)
+  status          BlogPostStatus   @default(DRAFT)
+  publishedAt     DateTime?
+  authorUserId    String?
+  author          User?            @relation("BlogPostAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([category, status])
+  @@index([authorUserId])
 }

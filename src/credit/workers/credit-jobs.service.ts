@@ -26,7 +26,7 @@ const RELEASABLE_RESERVATION_STATUSES: CreditReservationStatus[] = [
 /**
  * Batch jobs backing the credit engine's time-based state transitions:
  * reservation/approval expiry (M3) and the daily/monthly interest cycle
- * (M6). Every method here is idempotent and safe to re-run on every tick —
+ * (M6). Every method here is idempotent and safe to re-run on every tick 
  * see `CreditSchedulerService` for how these are actually invoked.
  */
 @Injectable()

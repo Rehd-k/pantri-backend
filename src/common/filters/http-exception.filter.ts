@@ -73,7 +73,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     const path = request.originalUrl || request.url || '';
-    const line = `${request.method ?? 'HTTP'} ${status} ${path} — ${exceptionMessage(exception)}`;
+    const line = `${request.method ?? 'HTTP'} ${status} ${path}  ${exceptionMessage(exception)}`;
     if (status >= 500) {
       this.logger.error(
         line,

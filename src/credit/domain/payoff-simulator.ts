@@ -37,7 +37,7 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * Projects a month-by-month amortization schedule for a revolving balance
  * being repaid via fixed payroll deductions, applying simple daily interest
  * outside of the grace window. This is a planning/estimation tool (used to
- * warn employees/employers "this purchase pays off in N months") — it is
+ * warn employees/employers "this purchase pays off in N months")  it is
  * NOT the ledger; actual interest is posted by `InterestService` from real
  * daily accruals.
  */

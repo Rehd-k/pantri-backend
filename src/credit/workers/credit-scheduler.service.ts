@@ -14,7 +14,7 @@ const DAY_MS = 24 * HOUR_MS;
  * `@nestjs/schedule` (not a dependency of this project): reservation and
  * approval expiry run hourly, and the daily interest accrual runs once a
  * day. Every job is idempotent (see `CreditJobsService`), so overlapping or
- * missed ticks are harmless — this is a plain best-effort in-process
+ * missed ticks are harmless  this is a plain best-effort in-process
  * scheduler, not a durable job queue.
  */
 @Injectable()

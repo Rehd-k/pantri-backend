@@ -129,7 +129,7 @@ export const DEFAULT_RISK_RULES: RiskRule[] = [
  * Aggregates a set of pluggable `RiskRule`s into a single score (0-100,
  * higher = riskier) and an overall decision. Swap in a different rule set
  * (e.g. one that calls an ML scoring service) by providing an alternate
- * `RISK_RULES` value in `RiskModule` — nothing else in the codebase needs
+ * `RISK_RULES` value in `RiskModule`  nothing else in the codebase needs
  * to change.
  */
 @Injectable()
