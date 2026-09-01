@@ -24,7 +24,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
-    "migrate:installments": "tsx prisma/scripts/migrate-installments-to-credit.ts"
+    "migrate:installments": "tsx prisma/scripts/migrate-installments-to-credit.ts",
+    "user:create": "tsx prisma/scripts/create-user.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
