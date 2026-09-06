@@ -168,8 +168,11 @@ async function main() {
       id: 'default',
       freeDeliveryMinKobo: nairaToKobo(50_000),
       deliveryFeeKobo: nairaToKobo(2_000),
+      minOrderKobo: nairaToKobo(50_000),
     },
-    update: {},
+    update: {
+      minOrderKobo: nairaToKobo(50_000),
+    },
   });
   console.log('Ensured platform delivery settings');
 

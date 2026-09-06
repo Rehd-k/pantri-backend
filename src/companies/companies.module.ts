@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
 import { CreditModule } from '../credit/credit.module';
 import {
@@ -10,7 +11,7 @@ import { CompaniesAdminController } from './companies-admin.controller';
 import { CompaniesService } from './companies.service';
 
 @Module({
-  imports: [AuthModule, CreditModule],
+  imports: [AuthModule, CreditModule, AuditModule],
   controllers: [
     CompaniesAdminController,
     AdminCompanyInvoiceController,

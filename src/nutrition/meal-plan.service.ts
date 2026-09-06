@@ -35,6 +35,7 @@ import {
   UpsertMealRecipeDto,
 } from './dto/meal-plan.dto';
 import { RecipeService } from './recipe.service';
+import { MealPlanDemandService } from './meal-plan-demand.service';
 import {
   addUtcDays,
   computeCompleteness,
@@ -91,6 +92,8 @@ const mealPlanInclude = {
                       name: true,
                       imageUrl: true,
                       nutritionFacts: true,
+                      recipeUnitOverrideMg: true,
+                      recipeUnitOverrideMl: true,
                       measureFamily: { select: { dimension: true } },
                     },
                   },
@@ -140,6 +143,7 @@ export class MealPlanService {
     private readonly prisma: PrismaService,
     private readonly aiMealPlan: AiMealPlanService,
     private readonly recipeService: RecipeService,
+    private readonly demand: MealPlanDemandService,
   ) {}
 
   async generateForUser(userId: string): Promise<MealPlanDetailDto> {
@@ -201,6 +205,7 @@ export class MealPlanService {
           goals: catalog.promptSnapshot.goals,
           recipeSource: RecipeSource.AI,
           replaceExisting: true,
+          baseServings: catalog.promptSnapshot.servings ?? 1,
         });
       });
     } catch (error) {
@@ -766,6 +771,7 @@ export class MealPlanService {
         recipeSource: RecipeSource.AI,
         replaceExisting: Boolean(dto.replaceExisting),
         existingDays: plan.days,
+        baseServings: catalog.promptSnapshot.servings ?? 1,
       });
     });
 
@@ -860,27 +866,68 @@ export class MealPlanService {
     reviewerId: string,
     dto: ApproveMealPlanDto,
   ): Promise<MealPlanDetailDto> {
-    const quantityByProduct = new Map<string, number>();
+    // Require recipe ingredients for every primary meal.
     for (const day of plan.days) {
       for (const item of day.items) {
-        const fromRecipe = item.recipe?.ingredients ?? [];
-        if (fromRecipe.length > 0) {
-          for (const ingredient of fromRecipe) {
-            quantityByProduct.set(
-              ingredient.productId,
-              (quantityByProduct.get(ingredient.productId) ?? 0) +
-                ingredient.quantityCanonical,
-            );
-          }
-        } else if (item.productId) {
-          quantityByProduct.set(
-            item.productId,
-            (quantityByProduct.get(item.productId) ?? 0) +
-              (item.quantityCanonical > 0 ? item.quantityCanonical : 0),
+        if (String(item.matchType) === 'ALTERNATIVE') continue;
+        const ingredients = item.recipe?.ingredients ?? [];
+        if (ingredients.length === 0) {
+          throw new BadRequestException(
+            `Meal "${item.title}" on day ${day.dayIndex} needs a recipe with ingredients before publish`,
           );
         }
       }
     }
+
+    const planDays = Math.max(1, plan.days.length);
+    const productIdsPreview = new Set<string>();
+    for (const day of plan.days) {
+      for (const item of day.items) {
+        for (const ing of item.recipe?.ingredients ?? []) {
+          productIdsPreview.add(ing.productId);
+        }
+      }
+    }
+    const profiles = await this.prisma.productReplenishmentProfile.findMany({
+      where: { productId: { in: [...productIdsPreview] } },
+    });
+    const productHorizons = new Map(
+      profiles.map((p) => [
+        p.productId,
+        {
+          shelfLifeDays: p.shelfLifeDays,
+          preferredCycleDays: p.preferredCycleDays,
+        },
+      ]),
+    );
+
+    const quantityByProduct = this.demand.aggregateCanonical(
+      plan.days.map((day) => ({
+        planDate: day.planDate,
+        items: day.items.map((item) => ({
+          matchType: item.matchType,
+          status: item.status ?? 'PLANNED',
+          servings: item.servings ?? 1,
+          recipe: item.recipe
+            ? {
+                baseServings: item.recipe.baseServings ?? 1,
+                ingredients: item.recipe.ingredients.map((ing) => ({
+                  productId: ing.productId,
+                  quantityCanonical: ing.quantityCanonical,
+                })),
+              }
+            : null,
+          productId: item.productId,
+          quantityCanonical: item.quantityCanonical,
+        })),
+      })),
+      {
+        statuses: ['PLANNED', 'SUBSTITUTED'],
+        planDays,
+        productHorizons,
+      },
+    );
+
     if (quantityByProduct.size === 0) {
       throw new BadRequestException(
         'Cannot publish a meal plan with no matched catalog products',
@@ -906,6 +953,11 @@ export class MealPlanService {
       }
     }
 
+    const packageLines = this.demand.packsForDemand(
+      quantityByProduct,
+      cheapestByProduct,
+    );
+
     const shareSlug = `meal-${plan.id.slice(-8)}-${Date.now().toString(36)}`;
     const updated = await this.prisma.$transaction(async (tx) => {
       const pkg = await tx.pantryPackage.create({
@@ -922,18 +974,11 @@ export class MealPlanService {
           shareSlug,
           createdByUserId: plan.employee.user.id,
           items: {
-            create: [...quantityByProduct.entries()].map(
-              ([productId, neededCanonical], index) => {
-                const pack = cheapestByProduct.get(productId)!;
-                const size =
-                  pack.amountMg ?? pack.amountMl ?? pack.amountEach ?? 0;
-                const quantity =
-                  size > 0 && neededCanonical > 0
-                    ? Math.max(1, Math.ceil(neededCanonical / size))
-                    : 1;
-                return { packId: pack.id, quantity, sortOrder: index };
-              },
-            ),
+            create: packageLines.map((line, index) => ({
+              packId: line.packId,
+              quantity: line.quantity,
+              sortOrder: index,
+            })),
           },
         },
       });
@@ -967,6 +1012,7 @@ export class MealPlanService {
       recipeSource: RecipeSource;
       replaceExisting: boolean;
       existingDays?: MealPlanWithRelations['days'];
+      baseServings?: number;
     },
   ): Promise<void> {
     if (input.replaceExisting) {
@@ -1024,6 +1070,7 @@ export class MealPlanService {
           productById: input.productById,
           goals: input.goals,
           sortOrder: sortOrder++,
+          baseServings: input.baseServings ?? 1,
         });
       }
     }
@@ -1044,6 +1091,7 @@ export class MealPlanService {
       productById?: Map<string, ProductForRecipe>;
       goals?: string[];
       sortOrder?: number;
+      baseServings?: number;
     },
   ): Promise<void> {
     const productById =
@@ -1075,6 +1123,7 @@ export class MealPlanService {
 
     const primary = resolved[0];
     const steps = normalizeInstructionSteps(input.instructionSteps);
+    const baseServings = Math.max(1, input.baseServings ?? 1);
     const recipeData = {
       employeeId: input.plan.employeeId,
       title: input.title,
@@ -1083,6 +1132,7 @@ export class MealPlanService {
       instructionSteps: steps,
       rationale: input.rationale,
       source: input.recipeSource,
+      baseServings,
       goalSnapshot: { goals: input.goals ?? [] } as Prisma.InputJsonValue,
     };
 
@@ -1439,8 +1489,15 @@ export class MealPlanService {
           measureUnitLabel: item.measureUnit?.shortLabel ?? null,
           recipeId: item.recipeId,
           recipe: item.recipe
-            ? this.recipeService.toRecipeDto(item.recipe, stock, row.employeeId)
+            ? this.recipeService.toRecipeDto(
+                item.recipe,
+                stock,
+                item.servings ?? item.recipe.baseServings ?? 1,
+              )
             : null,
+          status: item.status,
+          servings: item.servings,
+          substitutedRecipeId: item.substitutedRecipeId,
           cookedAt: item.cookedMeals[0]?.cookedAt.toISOString() ?? null,
           sortOrder: item.sortOrder,
         })),

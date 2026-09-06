@@ -19,6 +19,11 @@ import {
 import { EmployeeService } from '../identity/employee.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmployeeInviteService } from '../verification/employee-invite.service';
+import { AnalyticsService } from '../analytics/analytics.service';
+import {
+  EmployeeAnalyticsEvents,
+  EmployerAnalyticsEvents,
+} from '../analytics/taxonomy/analytics-events';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { AuthUserDto } from './dto/auth-user.dto';
 import { LoginDto } from './dto/login.dto';
@@ -46,6 +51,7 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly employeeService: EmployeeService,
     private readonly employeeInvites: EmployeeInviteService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   async login(dto: LoginDto): Promise<AuthResponseDto> {
@@ -73,7 +79,22 @@ export class AuthService {
       throw new ForbiddenException('Your account has been suspended.');
     }
 
-    return this.buildAuthResponse(user);
+    const response = await this.buildAuthResponse(user);
+    if (user.role === UserRole.EMPLOYEE) {
+      void this.analytics.trackSafe({
+        eventName: EmployeeAnalyticsEvents.LOGIN,
+        userId: user.id,
+        employeeId: user.employee?.id,
+        employerId: user.employerId,
+      });
+    } else if (user.role === UserRole.EMPLOYER) {
+      void this.analytics.trackSafe({
+        eventName: EmployerAnalyticsEvents.LOGIN,
+        userId: user.id,
+        employerId: user.employerId,
+      });
+    }
+    return response;
   }
 
   async registerEmployer(dto: RegisterEmployerDto): Promise<AuthResponseDto> {
@@ -114,6 +135,12 @@ export class AuthService {
       });
 
       return createdUser;
+    });
+
+    void this.analytics.trackSafe({
+      eventName: EmployerAnalyticsEvents.ACCOUNT_CREATED,
+      userId: user.id,
+      employerId: user.employerId,
     });
 
     return this.buildAuthResponse(user);
@@ -186,6 +213,25 @@ export class AuthService {
     const refreshed = await this.prisma.user.findUniqueOrThrow({
       where: { id: user.id },
       include: { employer: true, employee: true },
+    });
+
+    void this.analytics.trackSafe({
+      eventName: EmployeeAnalyticsEvents.ACCOUNT_CREATED,
+      userId: refreshed.id,
+      employeeId: employee.id,
+      employerId: invite.employerId,
+    });
+    void this.analytics.trackSafe({
+      eventName: EmployeeAnalyticsEvents.INVITATION_ACCEPTED,
+      userId: refreshed.id,
+      employeeId: employee.id,
+      employerId: invite.employerId,
+    });
+    void this.analytics.trackSafe({
+      eventName: EmployeeAnalyticsEvents.REGISTRATION_COMPLETED,
+      userId: refreshed.id,
+      employeeId: employee.id,
+      employerId: invite.employerId,
     });
 
     return this.buildAuthResponse(refreshed);

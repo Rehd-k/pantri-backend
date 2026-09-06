@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
@@ -11,9 +12,21 @@ import type { AuthUserPayload } from '../common/decorators/current-user.decorato
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { MealPlanDetailDto, MealPlanSummaryDto } from './dto/meal-plan.dto';
-import { CookMealResponseDto } from './dto/recipe.dto';
+import {
+  MealPlanDetailDto,
+  MealPlanSummaryDto,
+  SkipMealItemDto,
+  SubstituteMealItemDto,
+} from './dto/meal-plan.dto';
+import {
+  CookMealRequestDto,
+  CookMealResponseDto,
+} from './dto/recipe.dto';
 import { MealPlanService } from './meal-plan.service';
+import {
+  ReplenishmentService,
+  ReplenishmentSuggestionDto,
+} from './replenishment.service';
 import { RecipeService } from './recipe.service';
 
 @Controller('nutrition/meal-plans')
@@ -23,6 +36,7 @@ export class MealPlanController {
   constructor(
     private readonly mealPlanService: MealPlanService,
     private readonly recipeService: RecipeService,
+    private readonly replenishment: ReplenishmentService,
   ) {}
 
   @Get()
@@ -38,6 +52,20 @@ export class MealPlanController {
     return this.mealPlanService.getActiveForUser(user.id);
   }
 
+  @Get('replenishment')
+  replenishmentSuggestion(
+    @CurrentUser() user: AuthUserPayload,
+  ): Promise<ReplenishmentSuggestionDto> {
+    return this.replenishment.suggestForUser(user.id);
+  }
+
+  @Post('replenishment/add-to-cart')
+  addReplenishmentToCart(
+    @CurrentUser() user: AuthUserPayload,
+  ): Promise<ReplenishmentSuggestionDto> {
+    return this.replenishment.addSuggestionToCart(user.id);
+  }
+
   @Post('generate')
   generate(
     @CurrentUser() user: AuthUserPayload,
@@ -49,8 +77,36 @@ export class MealPlanController {
   cookItem(
     @CurrentUser() user: AuthUserPayload,
     @Param('itemId') itemId: string,
+    @Body() body: CookMealRequestDto,
   ): Promise<CookMealResponseDto> {
-    return this.recipeService.cookItemForUser(user.id, itemId);
+    return this.recipeService.cookItemForUser(
+      user.id,
+      itemId,
+      body?.servings,
+    );
+  }
+
+  @Post('items/:itemId/skip')
+  skipItem(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('itemId') itemId: string,
+    @Body() _body: SkipMealItemDto,
+  ) {
+    return this.recipeService.skipItemForUser(user.id, itemId);
+  }
+
+  @Post('items/:itemId/substitute')
+  substituteItem(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('itemId') itemId: string,
+    @Body() body: SubstituteMealItemDto,
+  ) {
+    return this.recipeService.substituteItemForUser(
+      user.id,
+      itemId,
+      body.substitutedRecipeId,
+      body.servings,
+    );
   }
 
   @Get(':id')

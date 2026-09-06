@@ -12,6 +12,8 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { RepaymentService } from '../credit/application/repayment.service';
 import { InterestService } from '../credit/interest/interest.service';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { EmployerAnalyticsEvents } from '../analytics/taxonomy/analytics-events';
 
 export interface GenerateRunParams {
   employerId: string;
@@ -49,6 +51,7 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     private readonly repayment: RepaymentService,
     private readonly interest: InterestService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   async generateRun(params: GenerateRunParams): Promise<PayrollRun> {
@@ -75,8 +78,8 @@ export class PayrollService {
       include: { creditAccount: true },
     });
 
-    return this.prisma.$transaction(async (tx) => {
-      const run = await tx.payrollRun.create({
+    const run = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.payrollRun.create({
         data: {
           employerId: params.employerId,
           periodStart: params.periodStart,
@@ -89,38 +92,40 @@ export class PayrollService {
 
       for (const employee of employees) {
         const account = employee.creditAccount;
-        const owedKobo = account
-          ? account.principalOutstandingKobo +
-            account.postedInterestKobo +
-            account.postedFeesKobo +
-            account.postedPenaltiesKobo
-          : 0;
-        if (owedKobo <= 0) {
-          continue;
-        }
-
-        const requestedKobo = Math.min(
-          owedKobo,
-          Math.floor((employee.salaryKobo * employee.deductionPercent) / 100),
+        if (!account) continue;
+        const owed =
+          account.principalOutstandingKobo +
+          account.postedInterestKobo +
+          account.postedFeesKobo +
+          account.postedPenaltiesKobo;
+        if (owed <= 0) continue;
+        const maxDeduction = Math.floor(
+          (employee.salaryKobo * employee.deductionPercent) / 100,
         );
-        if (requestedKobo <= 0) {
-          continue;
-        }
-
+        const requestedKobo = Math.min(owed, maxDeduction);
+        if (requestedKobo <= 0) continue;
         await tx.payrollDeductionLine.create({
           data: {
-            payrollRunId: run.id,
+            payrollRunId: created.id,
             employeeId: employee.id,
             salarySnapshotKobo: employee.salaryKobo,
             deductionPercentSnapshot: employee.deductionPercent,
             requestedKobo,
-            status: PayrollDeductionLineStatus.PENDING,
           },
         });
       }
 
-      return run;
+      return created;
     });
+
+    void this.analytics.trackSafe({
+      eventName: EmployerAnalyticsEvents.PAYROLL_SUBMITTED,
+      employerId: params.employerId,
+      entityType: 'payroll_run',
+      entityId: run.id,
+    });
+
+    return run;
   }
 
   async confirmRun(payrollRunId: string): Promise<PayrollRun> {
@@ -209,6 +214,15 @@ export class PayrollService {
     const updatedRun = await this.prisma.payrollRun.update({
       where: { id: params.payrollRunId },
       data: { status: finalStatus },
+    });
+
+    void this.analytics.trackSafe({
+      eventName: EmployerAnalyticsEvents.PAYROLL_PROCESSED,
+      userId: params.createdByUserId,
+      employerId: updatedRun.employerId,
+      entityType: 'payroll_run',
+      entityId: updatedRun.id,
+      metadata: { remittedCount, failedCount },
     });
 
     return { run: updatedRun, remittedCount, failedCount };

@@ -9,6 +9,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { UserRole } from '../../generated/prisma/client';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { AuthUserPayload } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -21,6 +23,7 @@ import {
   CompanyListItemDto,
   PickupPointDto,
 } from './dto/pickup-point-response.dto';
+import { UpdateEmployeeSalaryDto } from './dto/update-employee-salary.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -46,6 +49,19 @@ export class CompaniesAdminController {
   @Get('employees/:employeeId')
   getEmployee(@Param('employeeId') employeeId: string) {
     return this.companiesService.getEmployeePortal(employeeId);
+  }
+
+  @Patch('employees/:employeeId/salary')
+  updateEmployeeSalary(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('employeeId') employeeId: string,
+    @Body() dto: UpdateEmployeeSalaryDto,
+  ) {
+    return this.companiesService.updateEmployeeSalary(
+      employeeId,
+      dto,
+      user.id,
+    );
   }
 
   @Get('reports/exposure.csv')

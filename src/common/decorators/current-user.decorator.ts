@@ -1,5 +1,9 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
-import { UserRole, UserStatus } from '../../../generated/prisma/client';
+import {
+  PlatformRole,
+  UserRole,
+  UserStatus,
+} from '../../../generated/prisma/client';
 
 export type AuthUserPayload = {
   id: string;
@@ -8,6 +12,7 @@ export type AuthUserPayload = {
   lastName: string;
   role: UserRole;
   status: UserStatus;
+  platformRole: PlatformRole | null;
   employerId: string | null;
   businessName: string | null;
   fleetName: string | null;

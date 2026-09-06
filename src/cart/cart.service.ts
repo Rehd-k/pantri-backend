@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { DeliverySettingsService } from '../delivery-settings/delivery-settings.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { EmployeeAnalyticsEvents } from '../analytics/taxonomy/analytics-events';
 import { AddCartItemDto } from './dto/add-cart-item.dto';
 import { CartItemResponseDto } from './dto/cart-item-response.dto';
 import { CartResponseDto } from './dto/cart-response.dto';
@@ -60,6 +62,7 @@ export class CartService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly deliverySettings: DeliverySettingsService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   async getCart(userId: string): Promise<CartResponseDto> {
@@ -110,6 +113,14 @@ export class CartService {
       });
     }
 
+    void this.analytics.trackSafe({
+      eventName: EmployeeAnalyticsEvents.PRODUCT_ADDED_TO_CART,
+      userId,
+      entityType: 'product',
+      entityId: pack.productId,
+      metadata: { packId: pack.id, quantity },
+    });
+
     return this.getCart(userId);
   }
 
@@ -152,6 +163,12 @@ export class CartService {
     }
 
     await this.prisma.cartItem.delete({ where: { id: item.id } });
+    void this.analytics.trackSafe({
+      eventName: EmployeeAnalyticsEvents.PRODUCT_REMOVED_FROM_CART,
+      userId,
+      entityType: 'pack',
+      entityId: packId,
+    });
     return this.getCart(userId);
   }
 

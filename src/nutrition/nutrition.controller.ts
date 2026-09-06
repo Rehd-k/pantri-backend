@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   NotFoundException,
+  Post,
   Put,
   UseGuards,
 } from '@nestjs/common';
@@ -14,7 +15,9 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { NutritionCatalogResponseDto } from './dto/catalog.dto';
 import {
+  CreateProgressCheckpointDto,
   HealthProfileResponseDto,
+  ProgressCheckpointDto,
   UpsertHealthProfileDto,
 } from './dto/health-profile.dto';
 import { NutritionCatalogService } from './nutrition-catalog.service';
@@ -47,5 +50,20 @@ export class NutritionController {
     @Body() dto: UpsertHealthProfileDto,
   ): Promise<HealthProfileResponseDto> {
     return this.catalogService.upsertProfile(user.id, dto);
+  }
+
+  @Get('progress-checkpoints')
+  listCheckpoints(
+    @CurrentUser() user: AuthUserPayload,
+  ): Promise<ProgressCheckpointDto[]> {
+    return this.catalogService.listCheckpoints(user.id);
+  }
+
+  @Post('progress-checkpoints')
+  addCheckpoint(
+    @CurrentUser() user: AuthUserPayload,
+    @Body() dto: CreateProgressCheckpointDto,
+  ): Promise<ProgressCheckpointDto> {
+    return this.catalogService.addCheckpoint(user.id, dto);
   }
 }

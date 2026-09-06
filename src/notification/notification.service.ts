@@ -1,10 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import {
+  AnalyticsIngestionSource,
   Notification,
   NotificationChannel,
   NotificationDeliveryStatus,
   Prisma,
 } from '../../generated/prisma/client';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { EmployeeAnalyticsEvents } from '../analytics/taxonomy/analytics-events';
 import { PrismaService } from '../prisma/prisma.service';
 import { OutboxService } from './outbox.service';
 
@@ -27,6 +30,7 @@ export class NotificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly outbox: OutboxService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   async notify(params: NotifyParams): Promise<Notification> {
@@ -65,10 +69,21 @@ export class NotificationService {
       throw new NotFoundException('Notification not found');
     }
 
-    return this.prisma.notification.update({
+    const updated = await this.prisma.notification.update({
       where: { id: notificationId },
       data: { readAt: new Date(), status: NotificationDeliveryStatus.SENT },
     });
+
+    void this.analytics.trackSafe({
+      eventName: EmployeeAnalyticsEvents.NOTIFICATION_OPENED,
+      userId,
+      entityType: 'notification',
+      entityId: notificationId,
+      ingestionSource: AnalyticsIngestionSource.SERVER,
+      metadata: { type: notification.type },
+    });
+
+    return updated;
   }
 
   async listForUser(userId: string, limit = 50): Promise<Notification[]> {

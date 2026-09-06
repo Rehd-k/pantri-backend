@@ -18,6 +18,7 @@ import {
 } from 'class-validator';
 import {
   MealItemMatchType,
+  MealItemStatus,
   MealPlanSource,
   MealPlanStatus,
 } from '../../../generated/prisma/client';
@@ -285,6 +286,9 @@ export class MealPlanItemResponseDto {
   measureUnitLabel!: string | null;
   recipeId!: string | null;
   recipe!: RecipeResponseDto | null;
+  status!: MealItemStatus;
+  servings!: number;
+  substitutedRecipeId!: string | null;
   cookedAt!: string | null;
   sortOrder!: number;
 }
@@ -387,4 +391,24 @@ export class AiSlotSuggestionDto {
   ingredients!: MealIngredientInputDto[];
   applied!: boolean;
   item!: MealPlanItemResponseDto | null;
+}
+
+export class SkipMealItemDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
+export class SubstituteMealItemDto {
+  @IsString()
+  @IsNotEmpty()
+  substitutedRecipeId!: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  servings?: number;
 }

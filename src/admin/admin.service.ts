@@ -13,6 +13,7 @@ import {
 import { AuthService } from '../auth/auth.service';
 import { AuthResponseDto } from '../auth/dto/auth-response.dto';
 import { AuthUserDto } from '../auth/dto/auth-user.dto';
+import { serializeAdminEmployeePortal } from '../credit/application/serialize-admin-employee';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   AdminUserListItemDto,
@@ -110,7 +111,14 @@ export class AdminService {
         },
         employee: {
           include: {
-            employer: { select: { id: true, name: true } },
+            employer: {
+              select: {
+                id: true,
+                name: true,
+                payrollDayOfMonth: true,
+                creditPolicy: true,
+              },
+            },
             verificationDocuments: { orderBy: { createdAt: 'desc' } },
             salaryHistory: { orderBy: { effectiveAt: 'desc' } },
             orders: {
@@ -119,13 +127,19 @@ export class AdminService {
               include: {
                 items: true,
                 statusHistory: { orderBy: { createdAt: 'asc' } },
+                reservation: true,
               },
             },
             creditAccount: {
               include: {
                 ledgerEntries: {
                   take: 100,
-                  orderBy: { createdAt: 'desc' },
+                  orderBy: [{ sequence: 'desc' }],
+                  include: {
+                    createdBy: {
+                      select: { firstName: true, lastName: true },
+                    },
+                  },
                 },
               },
             },
@@ -192,13 +206,19 @@ export class AdminService {
     }
 
     const employee = user.employee;
-    const creditAccount = employee?.creditAccount ?? null;
-    const exposureKobo = creditAccount
-      ? creditAccount.principalOutstandingKobo +
-        creditAccount.postedInterestKobo +
-        creditAccount.postedFeesKobo +
-        creditAccount.postedPenaltiesKobo
-      : 0;
+    const serializedEmployee = employee
+      ? serializeAdminEmployeePortal({
+          ...employee,
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            status: user.status,
+          },
+          policy: employee.employer.creditPolicy,
+        })
+      : null;
 
     return {
       id: user.id,
@@ -224,7 +244,7 @@ export class AdminService {
               id: employee.employer.id,
               name: employee.employer.name,
               inviteCode: null,
-              payrollDayOfMonth: null,
+              payrollDayOfMonth: employee.employer.payrollDayOfMonth ?? null,
               createdAt: null,
             }
           : null,
@@ -237,82 +257,12 @@ export class AdminService {
       })),
       createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
-      employee: employee
+      employee: serializedEmployee
         ? {
-            id: employee.id,
-            employerId: employee.employerId,
-            employerName: employee.employer.name,
-            salaryKobo: employee.salaryKobo,
-            creditMultiplierBps: employee.creditMultiplierBps,
-            deductionPercent: employee.deductionPercent,
-            accountStatus: employee.accountStatus,
-            verificationStatus: employee.verificationStatus,
-            verifiedAt: employee.verifiedAt?.toISOString() ?? null,
-            rejectionReason: employee.rejectionReason,
-            phone: employee.phone,
-            addressLine: employee.addressLine,
-            city: employee.city,
-            state: employee.state,
-            createdAt: employee.createdAt.toISOString(),
-            exposureKobo,
-            verificationDocuments: employee.verificationDocuments.map((d) => ({
-              id: d.id,
-              type: d.type,
-              status: d.status,
-              fileName: d.fileName,
-              fileUrl: d.fileUrl,
-              mimeType: d.mimeType,
-              note: d.note,
-              createdAt: d.createdAt.toISOString(),
-            })),
-            salaryHistory: employee.salaryHistory.map((s) => ({
-              id: s.id,
-              salaryKobo: s.salaryKobo,
-              effectiveAt: s.effectiveAt.toISOString(),
-              reason: s.reason,
-            })),
-            orders: employee.orders.map((o) => ({
-              id: o.id,
-              totalKobo: o.totalKobo,
-              fulfillmentStatus: o.fulfillmentStatus,
-              creditStatus: o.creditStatus,
-              createdAt: o.createdAt.toISOString(),
-              items: o.items.map((i) => ({
-                id: i.id,
-                name: i.name,
-                quantity: i.quantity,
-              })),
-              statusHistory: o.statusHistory.map((h) => ({
-                id: h.id,
-                fromStatus: h.fromStatus,
-                toStatus: h.toStatus,
-                note: h.note,
-                changedById: h.changedById,
-                createdAt: h.createdAt.toISOString(),
-              })),
-            })),
-            creditAccount: creditAccount
-              ? {
-                  id: creditAccount.id,
-                  creditLimitKobo: creditAccount.creditLimitKobo,
-                  availableKobo: creditAccount.availableKobo,
-                  reservedKobo: creditAccount.reservedKobo,
-                  principalOutstandingKobo:
-                    creditAccount.principalOutstandingKobo,
-                  postedInterestKobo: creditAccount.postedInterestKobo,
-                  postedFeesKobo: creditAccount.postedFeesKobo,
-                  postedPenaltiesKobo: creditAccount.postedPenaltiesKobo,
-                  status: creditAccount.status,
-                  ledgerEntries: creditAccount.ledgerEntries.map((e) => ({
-                    id: e.id,
-                    entryType: e.entryType,
-                    amountKobo: e.amountKobo,
-                    balanceAfterKobo: e.balanceAfterKobo,
-                    createdAt: e.createdAt.toISOString(),
-                  })),
-                }
-              : null,
-            mealPlans: employee.mealPlans.map((m) => ({
+            ...serializedEmployee,
+            employerName: employee!.employer.name,
+            exposureKobo: serializedEmployee.finance?.outstandingKobo ?? 0,
+            mealPlans: employee!.mealPlans.map((m) => ({
               id: m.id,
               title: m.title,
               status: m.status,
@@ -320,23 +270,7 @@ export class AdminService {
               reviewedAt: m.reviewedAt?.toISOString() ?? null,
               createdAt: m.createdAt.toISOString(),
             })),
-            payrollLines: employee.payrollLines.map((line) => ({
-              id: line.id,
-              requestedKobo: line.requestedKobo,
-              collectedKobo: line.collectedKobo,
-              status: line.status,
-              salarySnapshotKobo: line.salarySnapshotKobo,
-              deductionPercentSnapshot: line.deductionPercentSnapshot,
-              createdAt: line.createdAt.toISOString(),
-              payrollRun: {
-                id: line.payrollRun.id,
-                periodStart: line.payrollRun.periodStart.toISOString(),
-                periodEnd: line.payrollRun.periodEnd.toISOString(),
-                payrollDate: line.payrollRun.payrollDate.toISOString(),
-                status: line.payrollRun.status,
-              },
-            })),
-            cookedMeals: employee.cookedMeals.map((meal) => ({
+            cookedMeals: employee!.cookedMeals.map((meal) => ({
               id: meal.id,
               recipeId: meal.recipeId,
               recipeTitle: meal.recipe.title,

@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsDateString,
   IsEnum,
   IsInt,
   IsNotEmpty,
@@ -60,6 +61,13 @@ export class UpsertHealthProfileDto {
   @Max(400)
   weightKg!: number;
 
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(20)
+  @Max(400)
+  targetWeightKg?: number;
+
   @IsEnum(DietaryLifestyle)
   lifestyle!: DietaryLifestyle;
 
@@ -74,6 +82,18 @@ export class UpsertHealthProfileDto {
 
   @IsBoolean()
   hasChildren!: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(50)
+  foodPreferences?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @ArrayMaxSize(50)
+  foodsToAvoid?: string[];
 
   @IsArray()
   @ValidateNested({ each: true })
@@ -109,10 +129,13 @@ export class HealthProfileResponseDto {
   gender!: string;
   heightCm!: number;
   weightKg!: number;
+  targetWeightKg!: number | null;
   lifestyle!: DietaryLifestyle;
   activityLevel!: ActivityLevel;
   householdSize!: number;
   hasChildren!: boolean;
+  foodPreferences!: string[];
+  foodsToAvoid!: string[];
   targetEnergyKcal!: number;
   targetProteinMg!: number;
   targetCarbsMg!: number;
@@ -125,4 +148,36 @@ export class HealthProfileResponseDto {
   goals!: HealthProfileGoalDto[];
   createdAt!: string;
   updatedAt!: string;
+}
+
+export class CreateProgressCheckpointDto {
+  @IsString()
+  @IsNotEmpty()
+  metricKey!: string;
+
+  @Type(() => Number)
+  @Min(0)
+  value!: number;
+
+  @IsOptional()
+  @IsString()
+  unitLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+
+  @IsOptional()
+  @IsDateString()
+  recordedAt?: string;
+}
+
+export class ProgressCheckpointDto {
+  id!: string;
+  metricKey!: string;
+  value!: number;
+  unitLabel!: string;
+  recordedAt!: string;
+  note!: string | null;
+  createdAt!: string;
 }

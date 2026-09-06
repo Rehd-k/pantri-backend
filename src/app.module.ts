@@ -24,6 +24,7 @@ import { VerificationModule } from './verification/verification.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 import { AiModule } from './ai/ai.module';
 import { BlogModule } from './blog/blog.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -52,6 +53,7 @@ import { BlogModule } from './blog/blog.module';
     NutritionModule,
     InventoryModule,
     BlogModule,
+    AnalyticsModule,
   ],
 })
 export class AppModule {}

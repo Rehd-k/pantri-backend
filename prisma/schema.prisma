@@ -295,12 +295,21 @@ enum MealItemMatchType {
   ALTERNATIVE
 }
 
+/// ORDER_FULFILLED ≡ purchase credit; COOKED ≡ meal consumption.
 enum HouseholdStockLedgerReason {
   ORDER_FULFILLED
   MANUAL_ADD
   MANUAL_ADJUST
   COOKED
   RESTOCK_DISCARDED
+  SPOILAGE
+}
+
+enum MealItemStatus {
+  PLANNED
+  COOKED
+  SKIPPED
+  SUBSTITUTED
 }
 
 enum RestockAlertStatus {
@@ -358,15 +367,18 @@ model Employer {
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  memberships   EmployerMembership[]
-  employees     Employee[]
-  employeeInvites EmployeeInvite[]
-  creditPolicy  CreditPolicy?
-  pickupPoints  EmployerPickupPoint[]
-  orders        Order[]
-  payrollRuns   PayrollRun[]
-  invoices      CompanyInvoice[]
-  users         User[]
+  memberships         EmployerMembership[]
+  employees           Employee[]
+  employeeInvites     EmployeeInvite[]
+  creditPolicy        CreditPolicy?
+  pickupPoints        EmployerPickupPoint[]
+  orders              Order[]
+  payrollRuns         PayrollRun[]
+  invoices            CompanyInvoice[]
+  users               User[]
+  analyticsEvents     AnalyticsEvent[]
+  analyticsSessions   AnalyticsSession[]
+  analyticsDailyRollups AnalyticsDailyRollup[]
 
   @@map("Employer")
 }
@@ -410,6 +422,8 @@ model User {
   orderStatusChanges     OrderStatusHistory[]  @relation("OrderStatusActor")
   invoicesGenerated      CompanyInvoice[]      @relation("InvoiceGenerator")
   blogPostsAuthored      BlogPost[]            @relation("BlogPostAuthor")
+  analyticsEvents        AnalyticsEvent[]
+  analyticsSessions      AnalyticsSession[]
 
   @@index([employerId])
   @@index([role, status])
@@ -466,6 +480,9 @@ model Employee {
   householdStock      HouseholdStock[]
   restockAlerts       RestockAlert[]
   recipes             Recipe[]
+  analyticsEvents     AnalyticsEvent[]
+  analyticsSessions   AnalyticsSession[]
+  analyticsSegmentMemberships AnalyticsSegmentMembership[]
   cookedMeals         CookedMeal[]
   dailyNutritionLogs  DailyNutritionLog[]
   invite              EmployeeInvite?
@@ -693,10 +710,14 @@ model WriteOffRequest {
 }
 
 model PlatformSettings {
-  id                       String   @id @default("default")
-  maxInterestAnnualRateBps Int      @default(2400)
-  penaltiesEnabledGlobal   Boolean  @default(false)
-  updatedAt                DateTime @updatedAt
+  id                              String    @id @default("default")
+  maxInterestAnnualRateBps        Int       @default(2400)
+  penaltiesEnabledGlobal          Boolean   @default(false)
+  /// First moment behavioral analytics began collecting. Set once on deploy.
+  behavioralCollectionStartedAt   DateTime?
+  /// Raw AnalyticsEvent retention in days (rollups kept longer).
+  analyticsRawRetentionDays       Int       @default(90)
+  updatedAt                       DateTime  @updatedAt
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1039,12 +1060,24 @@ model MarketplaceProduct {
   mealPlanItems                MealPlanItem[]
   householdStock               HouseholdStock[]
   recipeIngredients            RecipeIngredient[]
+  replenishmentProfile         ProductReplenishmentProfile?
 
   @@index([categoryId, isActive])
   @@index([subcategoryId, isActive])
   @@index([measureFamilyId])
   @@index([recipeUnitId])
   @@index([isActive, sortOrder])
+}
+
+/// Shelf-life / replenishment cycle hooks (optional per product).
+model ProductReplenishmentProfile {
+  id                 String             @id @default(cuid())
+  productId          String             @unique
+  product            MarketplaceProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  shelfLifeDays      Int?
+  preferredCycleDays Int?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 }
 
 model ProductPack {
@@ -1215,6 +1248,8 @@ model PlatformDeliverySettings {
   id                  String   @id @default("default")
   freeDeliveryMinKobo Int
   deliveryFeeKobo     Int
+  /// Minimum checkout total in kobo (₦50,000 = 5_000_000).
+  minOrderKobo        Int      @default(5000000)
   updatedAt           DateTime @updatedAt
 }
 
@@ -1276,10 +1311,15 @@ model HealthProfile {
   gender        String
   heightCm      Int
   weightKg      Int
+  targetWeightKg Int?
   lifestyle     DietaryLifestyle @default(EVERYTHING)
   activityLevel ActivityLevel    @default(MODERATE)
   householdSize Int              @default(1)
   hasChildren   Boolean          @default(false)
+  /// Foods the user prefers (free-text labels).
+  foodPreferences String[]       @default([])
+  /// Foods to avoid beyond formal allergies.
+  foodsToAvoid    String[]       @default([])
   targetEnergyKcal Int           @default(0)
   targetProteinMg  Int           @default(0)
   targetCarbsMg    Int           @default(0)
@@ -1291,8 +1331,25 @@ model HealthProfile {
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
-  allergies HealthProfileAllergy[]
-  goals     HealthProfileGoal[]
+  allergies   HealthProfileAllergy[]
+  goals       HealthProfileGoal[]
+  checkpoints ProgressCheckpoint[]
+}
+
+/// Periodic progress metrics (weight or nutritionist-defined).
+model ProgressCheckpoint {
+  id              String        @id @default(cuid())
+  healthProfileId String
+  healthProfile   HealthProfile @relation(fields: [healthProfileId], references: [id], onDelete: Cascade)
+  /// e.g. weight_kg, waist_cm, custom metric key
+  metricKey       String
+  value           Float
+  unitLabel       String        @default("")
+  recordedAt      DateTime      @default(now())
+  note            String?
+  createdAt       DateTime      @default(now())
+
+  @@index([healthProfileId, metricKey, recordedAt])
 }
 
 model HealthProfileAllergy {
@@ -1399,7 +1456,11 @@ model MealPlanItem {
   quantity             Int                 @default(1)
   quantityCanonical    Int                 @default(0)
   recipeId             String?
-  recipe               Recipe?             @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+  recipe               Recipe?             @relation("MealPlanItemRecipe", fields: [recipeId], references: [id], onDelete: SetNull)
+  status               MealItemStatus      @default(PLANNED)
+  servings             Int                 @default(1)
+  substitutedRecipeId  String?
+  substitutedRecipe    Recipe?             @relation("MealPlanItemSubstitutedRecipe", fields: [substitutedRecipeId], references: [id], onDelete: SetNull)
   sortOrder            Int                 @default(0)
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
@@ -1410,6 +1471,8 @@ model MealPlanItem {
   @@index([productId])
   @@index([measureUnitId])
   @@index([recipeId])
+  @@index([status])
+  @@index([substitutedRecipeId])
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1443,6 +1506,7 @@ model HouseholdStockLedger {
   deltaCanonical Int
   orderId        String?
   cookedMealId   String?
+  cookedMeal     CookedMeal?                @relation(fields: [cookedMealId], references: [id], onDelete: SetNull)
   note           String?
   createdAt      DateTime                   @default(now())
 
@@ -1479,12 +1543,15 @@ model Recipe {
   rationale        String       @default("")
   source           RecipeSource @default(AI)
   goalSnapshot     Json         @default("{}")
+  /// Ingredient quantities are defined for this many servings.
+  baseServings     Int          @default(1)
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
-  ingredients   RecipeIngredient[]
-  mealPlanItems MealPlanItem[]
-  cookedMeals   CookedMeal[]
+  ingredients              RecipeIngredient[]
+  mealPlanItems            MealPlanItem[]     @relation("MealPlanItemRecipe")
+  substitutedMealPlanItems MealPlanItem[]     @relation("MealPlanItemSubstitutedRecipe")
+  cookedMeals              CookedMeal[]
 
   @@index([employeeId, createdAt])
 }
@@ -1515,6 +1582,7 @@ model CookedMeal {
   recipe         Recipe         @relation(fields: [recipeId], references: [id], onDelete: Restrict)
   mealPlanItemId String?        @unique
   mealPlanItem   MealPlanItem?  @relation(fields: [mealPlanItemId], references: [id], onDelete: SetNull)
+  servings       Int            @default(1)
   cookedAt       DateTime       @default(now())
   energyKcal     Int            @default(0)
   proteinMg      Int            @default(0)
@@ -1525,6 +1593,8 @@ model CookedMeal {
   sodiumMg       Int            @default(0)
   ironUg         Int            @default(0)
   createdAt      DateTime       @default(now())
+
+  ledgerEntries HouseholdStockLedger[]
 
   @@index([employeeId, cookedAt])
   @@index([recipeId])
@@ -1624,4 +1694,113 @@ model BlogPost {
   @@index([status, publishedAt])
   @@index([category, status])
   @@index([authorUserId])
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ANALYTICS / BEHAVIORAL EVENTS
+// ═══════════════════════════════════════════════════════════════
+
+enum AnalyticsIngestionSource {
+  CLIENT
+  SERVER
+}
+
+model AnalyticsEvent {
+  id              String                   @id @default(cuid())
+  eventName       String
+  occurredAt      DateTime
+  receivedAt      DateTime                 @default(now())
+  userId          String?
+  user            User?                    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  employeeId      String?
+  employee        Employee?                @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  employerId      String?
+  employer        Employer?                @relation(fields: [employerId], references: [id], onDelete: SetNull)
+  sessionId       String?
+  entityType      String?
+  entityId        String?
+  platform        String?
+  appVersion      String?
+  metadata        Json                     @default("{}")
+  ingestionSource AnalyticsIngestionSource @default(CLIENT)
+
+  @@index([eventName, occurredAt])
+  @@index([employerId, occurredAt])
+  @@index([employeeId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([sessionId])
+  @@index([entityType, entityId])
+  @@index([occurredAt])
+}
+
+model AnalyticsSession {
+  id           String    @id @default(cuid())
+  sessionId    String    @unique
+  userId       String?
+  user         User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  employeeId   String?
+  employee     Employee? @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  employerId   String?
+  employer     Employer? @relation(fields: [employerId], references: [id], onDelete: SetNull)
+  platform     String?
+  startedAt    DateTime
+  lastSeenAt   DateTime
+  endedAt      DateTime?
+  eventCount   Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([userId, startedAt])
+  @@index([employeeId, startedAt])
+  @@index([employerId, startedAt])
+  @@index([startedAt])
+}
+
+/// Pre-aggregated daily metrics. employerId null = platform-wide.
+model AnalyticsDailyRollup {
+  id           String    @id @default(cuid())
+  date         DateTime  @db.Date
+  employerId   String?
+  employer     Employer? @relation(fields: [employerId], references: [id], onDelete: Cascade)
+  metricKey    String
+  valueNumeric Float?
+  valueJson    Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([date, employerId, metricKey])
+  @@index([metricKey, date])
+  @@index([employerId, date])
+}
+
+/// Nightly customer segment membership for RFM / lifecycle analytics.
+model AnalyticsSegmentMembership {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  segmentKey String
+  asOfDate   DateTime @db.Date
+  scores     Json     @default("{}")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([employeeId, segmentKey, asOfDate])
+  @@index([segmentKey, asOfDate])
+  @@index([asOfDate])
+  @@index([employeeId, asOfDate])
+}
+
+/// Optional KPI targets for executive scorecard comparisons.
+model AnalyticsKpiTarget {
+  id            String   @id @default(cuid())
+  metricKey     String
+  period        String   @default("monthly")
+  targetNumeric Float
+  employerId    String?
+  label         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([metricKey, period, employerId])
+  @@index([metricKey])
 }

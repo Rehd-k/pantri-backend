@@ -1,4 +1,5 @@
-import { IsDateString, IsOptional } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsDateString, IsInt, IsOptional, Max, Min } from 'class-validator';
 import { RecipeSource } from '../../../generated/prisma/client';
 import { HouseholdStockResponseDto } from '../../inventory/dto/inventory.dto';
 import { RestockAlertResponseDto } from '../../inventory/dto/inventory.dto';
@@ -13,6 +14,8 @@ export class RecipeIngredientResponseDto {
   productImageUrl!: string;
   measureUnitId!: string | null;
   measureUnitLabel!: string | null;
+  /** Full Pantra/user-facing label, e.g. "1 Pantra Cup". */
+  displayLabel!: string;
   quantity!: number;
   quantityCanonical!: number;
   haveCanonical!: number;
@@ -29,6 +32,7 @@ export class RecipeResponseDto {
   instructionSteps!: string[];
   rationale!: string;
   source!: RecipeSource;
+  baseServings!: number;
   cookability!: RecipeCookability;
   nutrition!: CanonicalNutritionDto;
   ingredients!: RecipeIngredientResponseDto[];
@@ -36,9 +40,19 @@ export class RecipeResponseDto {
   updatedAt!: string;
 }
 
+export class CookMealRequestDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  servings?: number;
+}
+
 export class CookMealResponseDto {
   recipe!: RecipeResponseDto;
   mealPlanItemId!: string | null;
+  servings!: number;
   nutrition!: CanonicalNutritionDto;
   cookedAt!: string;
   restockAlerts!: RestockAlertResponseDto[];

@@ -15,7 +15,9 @@ import {
   UpdatePrimaryGoalDto,
 } from './dto/catalog.dto';
 import {
+  CreateProgressCheckpointDto,
   HealthProfileResponseDto,
+  ProgressCheckpointDto,
   UpsertHealthProfileDto,
 } from './dto/health-profile.dto';
 import { computeDailyTargets } from './nutrient-targets';
@@ -292,10 +294,13 @@ export class NutritionCatalogService {
           gender: dto.gender.trim(),
           heightCm: dto.heightCm,
           weightKg: dto.weightKg,
+          targetWeightKg: dto.targetWeightKg ?? null,
           lifestyle,
           activityLevel: dto.activityLevel,
           householdSize,
           hasChildren,
+          foodPreferences: dto.foodPreferences ?? [],
+          foodsToAvoid: dto.foodsToAvoid ?? [],
           targetEnergyKcal: targets.energyKcal,
           targetProteinMg: targets.proteinMg,
           targetCarbsMg: targets.carbsMg,
@@ -310,10 +315,13 @@ export class NutritionCatalogService {
           gender: dto.gender.trim(),
           heightCm: dto.heightCm,
           weightKg: dto.weightKg,
+          targetWeightKg: dto.targetWeightKg ?? null,
           lifestyle,
           activityLevel: dto.activityLevel,
           householdSize,
           hasChildren,
+          foodPreferences: dto.foodPreferences ?? [],
+          foodsToAvoid: dto.foodsToAvoid ?? [],
           targetEnergyKcal: targets.energyKcal,
           targetProteinMg: targets.proteinMg,
           targetCarbsMg: targets.carbsMg,
@@ -324,6 +332,24 @@ export class NutritionCatalogService {
           targetIronUg: targets.ironUg,
         },
       });
+
+      // Seed an initial weight checkpoint when target weight is set and none exist.
+      if (dto.weightKg) {
+        const existing = await tx.progressCheckpoint.count({
+          where: { healthProfileId: upserted.id, metricKey: 'weight_kg' },
+        });
+        if (existing === 0) {
+          await tx.progressCheckpoint.create({
+            data: {
+              healthProfileId: upserted.id,
+              metricKey: 'weight_kg',
+              value: dto.weightKg,
+              unitLabel: 'kg',
+              recordedAt: new Date(),
+            },
+          });
+        }
+      }
 
       await tx.healthProfileAllergy.deleteMany({
         where: { healthProfileId: upserted.id },
@@ -458,10 +484,13 @@ export class NutritionCatalogService {
     gender: string;
     heightCm: number;
     weightKg: number;
+    targetWeightKg: number | null;
     lifestyle: HealthProfileResponseDto['lifestyle'];
     activityLevel: HealthProfileResponseDto['activityLevel'];
     householdSize: number;
     hasChildren: boolean;
+    foodPreferences: string[];
+    foodsToAvoid: string[];
     targetEnergyKcal: number;
     targetProteinMg: number;
     targetCarbsMg: number;
@@ -492,10 +521,13 @@ export class NutritionCatalogService {
       gender: profile.gender,
       heightCm: profile.heightCm,
       weightKg: profile.weightKg,
+      targetWeightKg: profile.targetWeightKg,
       lifestyle: profile.lifestyle,
       activityLevel: profile.activityLevel,
       householdSize: profile.householdSize,
       hasChildren: profile.hasChildren,
+      foodPreferences: profile.foodPreferences ?? [],
+      foodsToAvoid: profile.foodsToAvoid ?? [],
       targetEnergyKcal: profile.targetEnergyKcal,
       targetProteinMg: profile.targetProteinMg,
       targetCarbsMg: profile.targetCarbsMg,
@@ -518,6 +550,67 @@ export class NutritionCatalogService {
       })),
       createdAt: profile.createdAt.toISOString(),
       updatedAt: profile.updatedAt.toISOString(),
+    };
+  }
+
+  async listCheckpoints(userId: string): Promise<ProgressCheckpointDto[]> {
+    const employee = await this.requireEmployeeForUser(userId);
+    const profile = await this.prisma.healthProfile.findUnique({
+      where: { employeeId: employee.id },
+    });
+    if (!profile) {
+      throw new NotFoundException('Health profile not found');
+    }
+    const rows = await this.prisma.progressCheckpoint.findMany({
+      where: { healthProfileId: profile.id },
+      orderBy: { recordedAt: 'asc' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      metricKey: row.metricKey,
+      value: row.value,
+      unitLabel: row.unitLabel,
+      recordedAt: row.recordedAt.toISOString(),
+      note: row.note,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
+  async addCheckpoint(
+    userId: string,
+    dto: CreateProgressCheckpointDto,
+  ): Promise<ProgressCheckpointDto> {
+    const employee = await this.requireEmployeeForUser(userId);
+    const profile = await this.prisma.healthProfile.findUnique({
+      where: { employeeId: employee.id },
+    });
+    if (!profile) {
+      throw new NotFoundException('Health profile not found');
+    }
+    const row = await this.prisma.progressCheckpoint.create({
+      data: {
+        healthProfileId: profile.id,
+        metricKey: dto.metricKey.trim(),
+        value: dto.value,
+        unitLabel: dto.unitLabel?.trim() || '',
+        note: dto.note?.trim() || null,
+        recordedAt: dto.recordedAt ? new Date(dto.recordedAt) : new Date(),
+      },
+    });
+    if (dto.metricKey.trim() === 'weight_kg') {
+      await this.prisma.healthProfile.update({
+        where: { id: profile.id },
+        data: { weightKg: Math.round(dto.value) },
+      });
+    }
+    return {
+      id: row.id,
+      metricKey: row.metricKey,
+      value: row.value,
+      unitLabel: row.unitLabel,
+      recordedAt: row.recordedAt.toISOString(),
+      note: row.note,
+      createdAt: row.createdAt.toISOString(),
     };
   }
 }

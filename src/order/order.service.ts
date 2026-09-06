@@ -33,6 +33,11 @@ import { DeliverySettingsService } from '../delivery-settings/delivery-settings.
 import { InventoryService } from '../inventory/inventory.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RiskEngineService } from '../risk/risk-engine.service';
+import { AnalyticsService } from '../analytics/analytics.service';
+import {
+  EmployeeAnalyticsEvents,
+  EmployerAnalyticsEvents,
+} from '../analytics/taxonomy/analytics-events';
 import { CheckoutDto } from './dto/checkout.dto';
 import { CheckoutResponseDto } from './dto/checkout-response.dto';
 import {
@@ -115,6 +120,7 @@ export class OrderService {
     private readonly riskEngine: RiskEngineService,
     private readonly ledger: LedgerPostingService,
     private readonly inventoryService: InventoryService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   async getEmployeeDashboard(userId: string): Promise<EmployeeDashboardDto> {
@@ -435,6 +441,19 @@ export class OrderService {
 
     await this.prisma.cartItem.deleteMany({ where: { cartId: cart.id } });
 
+    void this.analytics.trackSafe({
+      eventName: EmployeeAnalyticsEvents.ORDER_SUBMITTED,
+      userId,
+      employeeId: order.employeeId,
+      employerId: order.employerId,
+      entityType: 'order',
+      entityId: order.id,
+      metadata: {
+        totalKobo: order.totalKobo,
+        fulfillmentStatus: order.fulfillmentStatus,
+      },
+    });
+
     return {
       id: order.id,
       fulfillmentStatus: order.fulfillmentStatus,
@@ -624,6 +643,25 @@ export class OrderService {
         approvalExpiresAt: null,
       },
       include: ORDER_RELATIONS_INCLUDE,
+    }).then((updated) => {
+      void this.analytics.trackSafe({
+        eventName: EmployerAnalyticsEvents.ORDER_APPROVED,
+        userId: actorUserId,
+        employeeId: updated.employeeId,
+        employerId: updated.employerId,
+        entityType: 'order',
+        entityId: updated.id,
+      });
+      void this.analytics.trackSafe({
+        eventName: EmployeeAnalyticsEvents.ORDER_COMPLETED,
+        userId: actorUserId,
+        employeeId: updated.employeeId,
+        employerId: updated.employerId,
+        entityType: 'order',
+        entityId: updated.id,
+        metadata: { stage: 'approved' },
+      });
+      return updated;
     });
   }
 
@@ -652,7 +690,7 @@ export class OrderService {
       });
     }
 
-    return this.prisma.order.update({
+    const rejected = await this.prisma.order.update({
       where: { id: orderId },
       data: {
         fulfillmentStatus: OrderFulfillmentStatus.CANCELLED,
@@ -660,6 +698,15 @@ export class OrderService {
       },
       include: ORDER_RELATIONS_INCLUDE,
     });
+    void this.analytics.trackSafe({
+      eventName: EmployerAnalyticsEvents.ORDER_REJECTED,
+      userId: actorUserId,
+      employeeId: rejected.employeeId,
+      employerId: rejected.employerId,
+      entityType: 'order',
+      entityId: rejected.id,
+    });
+    return rejected;
   }
 
   /**
@@ -798,6 +845,18 @@ export class OrderService {
         },
         include: ORDER_RELATIONS_INCLUDE,
       });
+    }).then((fulfilled) => {
+      void this.analytics.trackSafe({
+        eventName: isFullyCaptured
+          ? EmployeeAnalyticsEvents.ORDER_DELIVERED
+          : EmployeeAnalyticsEvents.ORDER_PARTIALLY_FULFILLED,
+        userId: actorUserId,
+        employeeId: fulfilled.employeeId,
+        employerId: fulfilled.employerId,
+        entityType: 'order',
+        entityId: fulfilled.id,
+      });
+      return fulfilled;
     });
   }
 
@@ -836,7 +895,7 @@ export class OrderService {
       });
     }
 
-    return this.prisma.order.update({
+    const cancelled = await this.prisma.order.update({
       where: { id: orderId },
       data: {
         fulfillmentStatus: OrderFulfillmentStatus.CANCELLED,
@@ -844,6 +903,15 @@ export class OrderService {
       },
       include: ORDER_RELATIONS_INCLUDE,
     });
+    void this.analytics.trackSafe({
+      eventName: EmployeeAnalyticsEvents.ORDER_CANCELLED,
+      userId: actorUserId,
+      employeeId: cancelled.employeeId,
+      employerId: cancelled.employerId,
+      entityType: 'order',
+      entityId: cancelled.id,
+    });
+    return cancelled;
   }
 
   /** Posts a (partial or full) refund against a FULFILLED order's captured balance. */
@@ -913,6 +981,17 @@ export class OrderService {
         data: { creditStatus },
         include: ORDER_RELATIONS_INCLUDE,
       });
+    }).then((refunded) => {
+      void this.analytics.trackSafe({
+        eventName: EmployeeAnalyticsEvents.REFUND_ISSUED,
+        userId: actorUserId,
+        employeeId: refunded.employeeId,
+        employerId: refunded.employerId,
+        entityType: 'order',
+        entityId: refunded.id,
+        metadata: { amountKobo, reason },
+      });
+      return refunded;
     });
   }
 

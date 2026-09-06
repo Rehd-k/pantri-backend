@@ -1,10 +1,12 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
   HouseholdStockLedgerReason,
+  MealItemStatus,
   Prisma,
 } from '../../generated/prisma/client';
 import {
@@ -17,6 +19,10 @@ import {
 } from '../common/nutrition-facts';
 import { InventoryService } from '../inventory/inventory.service';
 import { HouseholdStockResponseDto } from '../inventory/dto/inventory.dto';
+import {
+  formatPantraDisplay,
+  scaleCanonical,
+} from '../measure/measure-convert';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CookedMealSummaryDto,
@@ -40,6 +46,8 @@ const recipeInclude = {
           name: true,
           imageUrl: true,
           nutritionFacts: true,
+          recipeUnitOverrideMg: true,
+          recipeUnitOverrideMl: true,
           measureFamily: { select: { dimension: true } },
         },
       },
@@ -57,7 +65,11 @@ export class RecipeService {
     private readonly inventory: InventoryService,
   ) {}
 
-  async getForUser(userId: string, recipeId: string): Promise<RecipeResponseDto> {
+  async getForUser(
+    userId: string,
+    recipeId: string,
+    servings?: number,
+  ): Promise<RecipeResponseDto> {
     const employee = await this.requireEmployee(userId);
     const recipe = await this.prisma.recipe.findFirst({
       where: { id: recipeId, employeeId: employee.id },
@@ -67,13 +79,18 @@ export class RecipeService {
       throw new NotFoundException('Recipe not found');
     }
     const stock = await this.stockMap(employee.id);
-    return this.toRecipeDto(recipe, stock, employee.id);
+    return this.toRecipeDto(
+      recipe,
+      stock,
+      servings ?? recipe.baseServings,
+    );
   }
 
   async cookForUser(
     userId: string,
     recipeId: string,
     mealPlanItemId?: string,
+    servings?: number,
   ): Promise<CookMealResponseDto> {
     const employee = await this.requireEmployee(userId);
     const recipe = await this.prisma.recipe.findFirst({
@@ -84,8 +101,12 @@ export class RecipeService {
       throw new NotFoundException('Recipe not found');
     }
 
+    const cookServings = Math.max(
+      1,
+      servings ?? recipe.baseServings ?? 1,
+    );
     const stock = await this.stockMap(employee.id);
-    const dto = this.toRecipeDto(recipe, stock, employee.id);
+    const dto = this.toRecipeDto(recipe, stock, cookServings);
     if (dto.cookability === 'blocked' || dto.cookability === 'partial') {
       throw new ConflictException({
         message: 'Not enough pantry stock to cook this recipe',
@@ -93,27 +114,71 @@ export class RecipeService {
       });
     }
 
-    const nutrition = this.sumRecipeNutrition(recipe);
+    const nutrition = this.sumRecipeNutrition(recipe, cookServings);
     const cookedAt = new Date();
     const day = utcDateOnly(cookedAt);
 
     const result = await this.prisma.$transaction(async (tx) => {
+      if (mealPlanItemId) {
+        const item = await tx.mealPlanItem.findFirst({
+          where: {
+            id: mealPlanItemId,
+            mealPlanDay: { mealPlan: { employeeId: employee.id } },
+          },
+        });
+        if (!item) {
+          throw new NotFoundException('Meal not found on your plan');
+        }
+        if (
+          item.status === MealItemStatus.COOKED ||
+          item.status === MealItemStatus.SKIPPED
+        ) {
+          throw new ConflictException(
+            `This meal is already ${item.status.toLowerCase()}`,
+          );
+        }
+        // SUBSTITUTED meals cook the substitute recipe, not the original.
+        if (
+          item.status === MealItemStatus.SUBSTITUTED &&
+          item.substitutedRecipeId &&
+          item.substitutedRecipeId !== recipe.id
+        ) {
+          throw new ConflictException(
+            'Cook the substituted recipe for this meal',
+          );
+        }
+      }
+
       const cooked = await tx.cookedMeal.create({
         data: {
           employeeId: employee.id,
           recipeId: recipe.id,
           mealPlanItemId: mealPlanItemId ?? null,
+          servings: cookServings,
           cookedAt,
           ...nutrition,
         },
       });
 
+      if (mealPlanItemId) {
+        await tx.mealPlanItem.update({
+          where: { id: mealPlanItemId },
+          data: { status: MealItemStatus.COOKED, servings: cookServings },
+        });
+      }
+
       const updatedStock: HouseholdStockResponseDto[] = [];
       for (const ingredient of recipe.ingredients) {
+        const delta = -scaleCanonical(
+          ingredient.quantityCanonical,
+          cookServings,
+          recipe.baseServings,
+        );
+        if (delta === 0) continue;
         const row = await this.inventory.applyDelta(tx, {
           employeeId: employee.id,
           productId: ingredient.productId,
-          deltaCanonical: -ingredient.quantityCanonical,
+          deltaCanonical: delta,
           reason: HouseholdStockLedgerReason.COOKED,
           cookedMealId: cooked.id,
         });
@@ -143,21 +208,7 @@ export class RecipeService {
         },
       });
 
-      const restockAlerts = await tx.restockAlert.findMany({
-        where: {
-          employeeId: employee.id,
-          status: 'OPEN',
-          productId: { in: recipe.ingredients.map((i) => i.productId) },
-        },
-        include: {
-          stock: {
-            include: { product: { select: { name: true, imageUrl: true } } },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      return { cooked, updatedStock, restockAlerts };
+      return { cooked, updatedStock };
     });
 
     const nextStock = await this.stockMap(employee.id);
@@ -167,8 +218,9 @@ export class RecipeService {
     );
 
     return {
-      recipe: this.toRecipeDto(recipe, nextStock, employee.id),
+      recipe: this.toRecipeDto(recipe, nextStock, cookServings),
       mealPlanItemId: result.cooked.mealPlanItemId,
+      servings: cookServings,
       nutrition,
       cookedAt: result.cooked.cookedAt.toISOString(),
       restockAlerts: opened,
@@ -179,6 +231,7 @@ export class RecipeService {
   async cookItemForUser(
     userId: string,
     itemId: string,
+    servings?: number,
   ): Promise<CookMealResponseDto> {
     const employee = await this.requireEmployee(userId);
     const item = await this.prisma.mealPlanItem.findFirst({
@@ -188,20 +241,101 @@ export class RecipeService {
       },
       select: {
         id: true,
+        status: true,
+        servings: true,
         recipeId: true,
-        cookedMeals: { select: { id: true, cookedAt: true }, take: 1 },
+        substitutedRecipeId: true,
+        cookedMeals: { select: { id: true }, take: 1 },
       },
     });
     if (!item) {
       throw new NotFoundException('Meal not found on your plan');
     }
-    if (!item.recipeId) {
-      throw new NotFoundException('This meal does not have a recipe yet');
-    }
-    if (item.cookedMeals.length > 0) {
+    if (item.status === MealItemStatus.COOKED || item.cookedMeals.length > 0) {
       throw new ConflictException('This meal was already marked as cooked');
     }
-    return this.cookForUser(userId, item.recipeId, item.id);
+    if (item.status === MealItemStatus.SKIPPED) {
+      throw new ConflictException('This meal was skipped');
+    }
+
+    const recipeId =
+      item.status === MealItemStatus.SUBSTITUTED && item.substitutedRecipeId
+        ? item.substitutedRecipeId
+        : item.recipeId;
+    if (!recipeId) {
+      throw new NotFoundException('This meal does not have a recipe yet');
+    }
+    return this.cookForUser(
+      userId,
+      recipeId,
+      item.id,
+      servings ?? item.servings,
+    );
+  }
+
+  async skipItemForUser(
+    userId: string,
+    itemId: string,
+  ): Promise<{ id: string; status: MealItemStatus }> {
+    const employee = await this.requireEmployee(userId);
+    const item = await this.prisma.mealPlanItem.findFirst({
+      where: {
+        id: itemId,
+        mealPlanDay: { mealPlan: { employeeId: employee.id } },
+      },
+    });
+    if (!item) {
+      throw new NotFoundException('Meal not found on your plan');
+    }
+    if (item.status === MealItemStatus.COOKED) {
+      throw new ConflictException('Cannot skip a cooked meal');
+    }
+    const updated = await this.prisma.mealPlanItem.update({
+      where: { id: item.id },
+      data: { status: MealItemStatus.SKIPPED },
+    });
+    return { id: updated.id, status: updated.status };
+  }
+
+  async substituteItemForUser(
+    userId: string,
+    itemId: string,
+    substitutedRecipeId: string,
+    servings?: number,
+  ): Promise<{ id: string; status: MealItemStatus; substitutedRecipeId: string }> {
+    const employee = await this.requireEmployee(userId);
+    const item = await this.prisma.mealPlanItem.findFirst({
+      where: {
+        id: itemId,
+        mealPlanDay: { mealPlan: { employeeId: employee.id } },
+      },
+    });
+    if (!item) {
+      throw new NotFoundException('Meal not found on your plan');
+    }
+    if (item.status === MealItemStatus.COOKED) {
+      throw new ConflictException('Cannot substitute a cooked meal');
+    }
+    const recipe = await this.prisma.recipe.findFirst({
+      where: { id: substitutedRecipeId, employeeId: employee.id },
+      select: { id: true },
+    });
+    if (!recipe) {
+      throw new BadRequestException('Substitute recipe not found');
+    }
+    const updated = await this.prisma.mealPlanItem.update({
+      where: { id: item.id },
+      data: {
+        status: MealItemStatus.SUBSTITUTED,
+        substitutedRecipeId: recipe.id,
+        ...(servings != null ? { servings: Math.max(1, servings) } : {}),
+      },
+    });
+    return {
+      id: updated.id,
+      status: updated.status,
+      substitutedRecipeId: updated.substitutedRecipeId!,
+    };
   }
 
   async progressForUser(
@@ -330,14 +464,19 @@ export class RecipeService {
   toRecipeDto(
     recipe: RecipeRow,
     stock: Map<string, number>,
-    _employeeId: string,
+    servings?: number,
   ): RecipeResponseDto {
+    const cookServings = Math.max(1, servings ?? recipe.baseServings ?? 1);
     const neededByProduct = new Map<string, number>();
     for (const ingredient of recipe.ingredients) {
+      const scaled = scaleCanonical(
+        ingredient.quantityCanonical,
+        cookServings,
+        recipe.baseServings,
+      );
       neededByProduct.set(
         ingredient.productId,
-        (neededByProduct.get(ingredient.productId) ?? 0) +
-          ingredient.quantityCanonical,
+        (neededByProduct.get(ingredient.productId) ?? 0) + scaled,
       );
     }
 
@@ -345,15 +484,38 @@ export class RecipeService {
       (ingredient) => {
         const have = stock.get(ingredient.productId) ?? 0;
         const neededTotal = neededByProduct.get(ingredient.productId) ?? 0;
+        const scaledQty = scaleCanonical(
+          ingredient.quantity,
+          cookServings,
+          recipe.baseServings,
+        );
+        const scaledCanonical = scaleCanonical(
+          ingredient.quantityCanonical,
+          cookServings,
+          recipe.baseServings,
+        );
+        const display = formatPantraDisplay(
+          scaledCanonical,
+          ingredient.measureUnit,
+          {
+            recipeUnitOverrideMg: ingredient.product.recipeUnitOverrideMg,
+            recipeUnitOverrideMl: ingredient.product.recipeUnitOverrideMl,
+          },
+          ingredient.product.measureFamily.dimension,
+        );
         return {
           id: ingredient.id,
           productId: ingredient.productId,
           productName: ingredient.product.name,
           productImageUrl: ingredient.product.imageUrl,
           measureUnitId: ingredient.measureUnitId,
-          measureUnitLabel: ingredient.measureUnit?.shortLabel ?? null,
-          quantity: ingredient.quantity,
-          quantityCanonical: ingredient.quantityCanonical,
+          measureUnitLabel:
+            ingredient.measureUnit?.name ??
+            ingredient.measureUnit?.shortLabel ??
+            null,
+          displayLabel: display.label,
+          quantity: scaledQty,
+          quantityCanonical: scaledCanonical,
           haveCanonical: have,
           isShort: have < neededTotal,
           sortOrder: ingredient.sortOrder,
@@ -361,7 +523,9 @@ export class RecipeService {
       },
     );
     const cookability: RecipeCookability = ingredients.some((i) => i.isShort)
-      ? 'partial'
+      ? ingredients.every((i) => i.isShort)
+        ? 'blocked'
+        : 'partial'
       : 'ready';
 
     return {
@@ -372,8 +536,9 @@ export class RecipeService {
       instructions: recipe.instructions,
       rationale: recipe.rationale,
       source: recipe.source,
+      baseServings: recipe.baseServings,
       cookability,
-      nutrition: this.sumRecipeNutrition(recipe),
+      nutrition: this.sumRecipeNutrition(recipe, cookServings),
       ingredients,
       instructionSteps: recipe.instructionSteps ?? [],
       createdAt: recipe.createdAt.toISOString(),
@@ -381,12 +546,21 @@ export class RecipeService {
     };
   }
 
-  sumRecipeNutrition(recipe: RecipeRow): CanonicalNutritionDto {
+  sumRecipeNutrition(
+    recipe: RecipeRow,
+    servings?: number,
+  ): CanonicalNutritionDto {
+    const cookServings = Math.max(1, servings ?? recipe.baseServings ?? 1);
     return recipe.ingredients.reduce((acc, ingredient) => {
+      const scaledCanonical = scaleCanonical(
+        ingredient.quantityCanonical,
+        cookServings,
+        recipe.baseServings,
+      );
       const profile = parseNutritionFacts(ingredient.product.nutritionFacts);
       const scaled = scaleNutritionByCanonical(
         profile,
-        ingredient.quantityCanonical,
+        scaledCanonical,
         ingredient.product.measureFamily.dimension,
       );
       return addNutrition(acc, scaled);

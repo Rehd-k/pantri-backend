@@ -9,7 +9,12 @@ import {
   Prisma,
   RestockAlertStatus,
 } from '../../generated/prisma/client';
-import { packCanonicalAmount, effectiveRecipeUnit } from '../measure/measure-convert';
+import {
+  packCanonicalAmount,
+  effectiveRecipeUnit,
+  formatPantraDisplay,
+  formatMetricCanonical,
+} from '../measure/measure-convert';
 import { PrismaService } from '../prisma/prisma.service';
 import { CartService } from '../cart/cart.service';
 import {
@@ -28,7 +33,15 @@ const stockInclude = {
       name: true,
       imageUrl: true,
       slug: true,
-      measureFamily: { select: { dimension: true } },
+      recipeUnitOverrideMg: true,
+      recipeUnitOverrideMl: true,
+      recipeUnit: true,
+      measureFamily: {
+        select: {
+          dimension: true,
+          defaultRecipeUnit: true,
+        },
+      },
     },
   },
 } satisfies Prisma.HouseholdStockInclude;
@@ -378,7 +391,19 @@ export class InventoryService {
 
   toStockDto(row: StockRow): HouseholdStockResponseDto {
     const dimension = row.product.measureFamily.dimension;
-    const formatted = formatCanonical(row.quantityCanonical, dimension);
+    const recipeUnit = effectiveRecipeUnit(row.product);
+    const pantra = formatPantraDisplay(
+      row.quantityCanonical,
+      recipeUnit,
+      {
+        recipeUnitOverrideMg: row.product.recipeUnitOverrideMg,
+        recipeUnitOverrideMl: row.product.recipeUnitOverrideMl,
+      },
+      dimension,
+    );
+    // Prefer Pantra unit names when the product has a recipe unit; else metric.
+    const usePantra = Boolean(recipeUnit?.name);
+    const metric = formatMetricCanonical(row.quantityCanonical, dimension);
     return {
       id: row.id,
       employeeId: row.employeeId,
@@ -391,8 +416,8 @@ export class InventoryService {
       },
       quantityCanonical: row.quantityCanonical,
       restockThresholdCanonical: row.restockThresholdCanonical,
-      displayQuantity: formatted.quantity,
-      displayUnit: formatted.unit,
+      displayQuantity: usePantra ? pantra.quantityLabel : metric.quantity,
+      displayUnit: usePantra ? pantra.unitName : metric.unit,
       isLow: row.quantityCanonical <= row.restockThresholdCanonical,
       isEmpty: row.quantityCanonical <= 0,
       dimension,
@@ -435,34 +460,3 @@ export class InventoryService {
   }
 }
 
-function formatCanonical(
-  quantityCanonical: number,
-  dimension: string,
-): { quantity: string; unit: string } {
-  if (dimension === 'VOLUME') {
-    if (quantityCanonical >= 1000) {
-      return {
-        quantity: trimNumber(quantityCanonical / 1000),
-        unit: 'L',
-      };
-    }
-    return { quantity: String(quantityCanonical), unit: 'ml' };
-  }
-  if (dimension === 'COUNT') {
-    return { quantity: String(quantityCanonical), unit: 'pcs' };
-  }
-  if (quantityCanonical >= 1_000_000) {
-    return {
-      quantity: trimNumber(quantityCanonical / 1_000_000),
-      unit: 'kg',
-    };
-  }
-  return {
-    quantity: trimNumber(quantityCanonical / 1000),
-    unit: 'g',
-  };
-}
-
-function trimNumber(value: number): string {
-  return value.toFixed(2).replace(/\.?0+$/, '');
-}

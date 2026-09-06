@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
@@ -13,6 +14,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import {
+  CookMealRequestDto,
   CookMealResponseDto,
   NutritionProgressQueryDto,
   NutritionProgressResponseDto,
@@ -46,7 +48,13 @@ export class RecipeController {
   cook(
     @CurrentUser() user: AuthUserPayload,
     @Param('id') id: string,
+    @Body() body: CookMealRequestDto,
   ): Promise<CookMealResponseDto> {
-    return this.recipeService.cookForUser(user.id, id);
+    return this.recipeService.cookForUser(
+      user.id,
+      id,
+      undefined,
+      body?.servings,
+    );
   }
 }

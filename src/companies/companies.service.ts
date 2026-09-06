@@ -7,6 +7,9 @@ import {
   LedgerEntryType,
   OrderFulfillmentStatus,
 } from '../../generated/prisma/client';
+import { AuditService } from '../audit/audit.service';
+import { CreditAccountService } from '../credit/application/credit-account.service';
+import { serializeAdminEmployeePortal } from '../credit/application/serialize-admin-employee';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreatePickupPointDto,
@@ -16,11 +19,16 @@ import {
   CompanyListItemDto,
   PickupPointDto,
 } from './dto/pickup-point-response.dto';
+import { UpdateEmployeeSalaryDto } from './dto/update-employee-salary.dto';
 
 /** Retains the historical `Companies` name for API/route compatibility; operates on `Employer` tenants. */
 @Injectable()
 export class CompaniesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly creditAccounts: CreditAccountService,
+    private readonly audit: AuditService,
+  ) {}
 
   async listCompanies(): Promise<CompanyListItemDto[]> {
     const rows = await this.prisma.employer.findMany({
@@ -201,7 +209,14 @@ export class CompaniesService {
             status: true,
           },
         },
-        employer: { select: { id: true, name: true } },
+        employer: {
+          select: {
+            id: true,
+            name: true,
+            payrollDayOfMonth: true,
+            creditPolicy: true,
+          },
+        },
         verificationDocuments: { orderBy: { createdAt: 'desc' } },
         salaryHistory: { orderBy: { effectiveAt: 'desc' } },
         orders: {
@@ -209,13 +224,34 @@ export class CompaniesService {
           include: {
             items: true,
             statusHistory: { orderBy: { createdAt: 'asc' } },
+            reservation: true,
           },
         },
         creditAccount: {
           include: {
             ledgerEntries: {
-              take: 50,
-              orderBy: { createdAt: 'desc' },
+              take: 100,
+              orderBy: [{ sequence: 'desc' }],
+              include: {
+                createdBy: {
+                  select: { firstName: true, lastName: true },
+                },
+              },
+            },
+          },
+        },
+        payrollLines: {
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+          include: {
+            payrollRun: {
+              select: {
+                id: true,
+                periodStart: true,
+                periodEnd: true,
+                payrollDate: true,
+                status: true,
+              },
             },
           },
         },
@@ -224,7 +260,76 @@ export class CompaniesService {
     if (!employee) {
       throw new NotFoundException('Employee not found');
     }
-    return employee;
+
+    return serializeAdminEmployeePortal({
+      ...employee,
+      policy: employee.employer.creditPolicy,
+    });
+  }
+
+  async updateEmployeeSalary(
+    employeeId: string,
+    dto: UpdateEmployeeSalaryDto,
+    actorId?: string,
+  ) {
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        salaryKobo: true,
+        creditMultiplierBps: true,
+      },
+    });
+    if (!employee) {
+      throw new NotFoundException('Employee not found');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.employee.update({
+        where: { id: employeeId },
+        data: {
+          salaryKobo: dto.salaryKobo,
+          ...(dto.creditMultiplierBps !== undefined
+            ? { creditMultiplierBps: dto.creditMultiplierBps }
+            : {}),
+        },
+      });
+      await tx.salaryHistory.create({
+        data: {
+          employeeId,
+          salaryKobo: dto.salaryKobo,
+          reason: dto.reason?.trim() || 'Admin salary update',
+        },
+      });
+      await this.audit.log(
+        {
+          action: 'employee.salary_update',
+          entityType: 'Employee',
+          entityId: employeeId,
+          actorId: actorId ?? null,
+          before: {
+            salaryKobo: employee.salaryKobo,
+            creditMultiplierBps: employee.creditMultiplierBps,
+          },
+          after: {
+            salaryKobo: dto.salaryKobo,
+            creditMultiplierBps:
+              dto.creditMultiplierBps ?? employee.creditMultiplierBps,
+            reason: dto.reason?.trim() || 'Admin salary update',
+          },
+        },
+        tx,
+      );
+    });
+
+    const creditAccount = await this.prisma.creditAccount.findUnique({
+      where: { employeeId },
+    });
+    if (creditAccount) {
+      await this.creditAccounts.recalculateLimit(employeeId);
+    }
+
+    return this.getEmployeePortal(employeeId);
   }
 
   async exportExposureCsv(): Promise<string> {

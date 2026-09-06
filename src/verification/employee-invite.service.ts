@@ -10,12 +10,17 @@ import {
   EmployeeInviteStatus,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { AnalyticsService } from '../analytics/analytics.service';
+import { EmployerAnalyticsEvents } from '../analytics/taxonomy/analytics-events';
 import { CreateEmployeeInviteDto } from './dto/verification.dto';
 import { EmployeeInviteResponseDto } from './dto/verification-response.dto';
 
 @Injectable()
 export class EmployeeInviteService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly analytics: AnalyticsService,
+  ) {}
 
   async createInvite(
     employerId: string,
@@ -59,6 +64,14 @@ export class EmployeeInviteService {
         expiresAt,
         createdById,
       },
+    });
+
+    void this.analytics.trackSafe({
+      eventName: EmployerAnalyticsEvents.EMPLOYEE_INVITED,
+      userId: createdById,
+      employerId,
+      entityType: 'employee_invite',
+      entityId: invite.id,
     });
 
     return this.toDto(invite);

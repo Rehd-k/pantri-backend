@@ -10,6 +10,7 @@ import {
   Prisma,
   WriteOffStatus,
 } from '../../../generated/prisma/client';
+import { AuditService } from '../../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { computeTotalOwedKobo } from '../domain/money';
 import {
@@ -48,6 +49,7 @@ export class WriteOffService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly ledger: LedgerPostingService,
+    private readonly audit: AuditService,
   ) {}
 
   async list(status?: WriteOffStatus): Promise<WriteOffWithRelations[]> {
@@ -187,6 +189,21 @@ export class WriteOffService {
           ledgerEntryId: lastEntryId,
         },
       });
+
+      await this.audit.log(
+        {
+          action: 'write_off.approve',
+          entityType: 'WriteOffRequest',
+          entityId: requestId,
+          actorId: approverId,
+          after: {
+            status: WriteOffStatus.EXECUTED,
+            amountKobo: request.amountKobo,
+            ledgerEntryId: lastEntryId,
+          },
+        },
+        tx,
+      );
     });
 
     return this.reload(requestId);
@@ -211,6 +228,14 @@ export class WriteOffService {
     await this.prisma.writeOffRequest.update({
       where: { id: requestId },
       data: { status: WriteOffStatus.REJECTED, approvedById: approverId },
+    });
+
+    await this.audit.log({
+      action: 'write_off.reject',
+      entityType: 'WriteOffRequest',
+      entityId: requestId,
+      actorId: approverId,
+      after: { status: WriteOffStatus.REJECTED },
     });
 
     return this.reload(requestId);
