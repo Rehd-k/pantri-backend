@@ -5,8 +5,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import {
   PayrollRunStatus,
   UserRole,
@@ -17,12 +19,16 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { AdminPayrollService } from './admin-payroll.service';
+import { PayrollInvoicePdfService } from './payroll-invoice-pdf.service';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
 export class AdminPayrollController {
-  constructor(private readonly adminPayroll: AdminPayrollService) {}
+  constructor(
+    private readonly adminPayroll: AdminPayrollService,
+    private readonly payrollInvoicePdf: PayrollInvoicePdfService,
+  ) {}
 
   @Get('payroll-runs')
   listRuns(
@@ -37,6 +43,26 @@ export class AdminPayrollController {
   @Get('payroll-runs/:id')
   getRun(@Param('id') id: string) {
     return this.adminPayroll.getRunDetail(id);
+  }
+
+  @Get('payroll-runs/:id/signed-invoice.pdf')
+  async signedInvoicePdf(
+    @CurrentUser() user: AuthUserPayload,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const result = await this.payrollInvoicePdf.buildSignedInvoice(id, {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${result.filename}"`,
+    );
+    res.send(result.buffer);
   }
 
   @Patch('payroll-runs/:id/confirm')
